@@ -685,3 +685,29 @@ async def extract_simple(
             detail=f"no dub streams found for episode {episode}; try type=sub",
         )
     raise HTTPException(status_code=500, detail=f"all providers failed. last error: {last_error}")
+    
+
+# ---------------------------------------------------------------------------
+# sanime.net Arabic provider — direct MP4 stream by AniList ID
+# ---------------------------------------------------------------------------
+
+@router.get("/sanime/{anilist_id}")
+async def get_sanime_stream(
+    anilist_id: int,
+    episode: int = Query(1, alias="e", description="episode number (1-based)"),
+):
+    SANIME_MAP: dict[int, dict] = {
+        20:     {"id": 512,   "dir": "Video2"},
+        21:     {"id": 532,   "dir": "Video"},
+        11061:  {"id": 669,   "dir": "Video3"},
+        235:    {"id": 653,   "dir": "Video"},
+        142592: {"id": 11989, "dir": "Video"},
+        97940:  {"id": 12012, "dir": "Video"},
+        100146: {"id": 11950, "dir": "Video"},
+    }
+    entry = SANIME_MAP.get(anilist_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"no sanime mapping for anilist_id={anilist_id}")
+    url = f"https://server.sanime.net/{entry['dir']}/{entry['id']}/{episode}.mp4"
+    return {"anilist_id": anilist_id, "sanime_id": entry["id"], "subdirectory": entry["dir"], "episode": episode, "url": url, "headers": {"Referer": "https://sanime.net/"}}
+
