@@ -9,6 +9,9 @@ RANKING = [
     "kaa", "anibd", "animegg", "mkissa", "animeonsen",
 ]
 
+# Arabic-language providers — only called when lang="ar"
+AR_RANKING = ["witanime"]
+
 WATCH_TIMEOUT = 75.0
 EPISODES_TIMEOUT = 60.0
 WATCH_CACHE_TTL = 45.0
@@ -76,8 +79,50 @@ async def _watch_one(mod, name, anilist_id, ep, audio, ctx):
         return name, None, round(time.time() - t0, 3), False
 
 
+def ar_providers():
+    mods = []
+    for name in AR_RANKING:
+        mod = _load(name)
+        if mod is not None:
+            mods.append((name, mod))
+    return mods
+
+
 async def race_watch(anilist_id: int, ep: int, audio: str = "sub",
-                     preferred: str | None = None) -> dict | None:
+                     preferred: str | None = None,
+                     lang: str = "en") -> dict | None:
+    # Arabic requests go to AR_RANKING providers only
+    if lang == "ar":
+        mods = ar_providers()
+        if not mods:
+            return None
+        ctx = await build_ctx(anilist_id)
+        pending = {asyncio.ensure_future(_watch_one(mod, name, anilist_id, ep, audio, ctx))
+                   for name, mod in mods}
+        timings: dict = {}
+        winner = None
+        try:
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    name, streams, dt, ok = task.result()
+                    timings[name] = {"seconds": dt, "ok": ok}
+                    record_latency(name, dt, ok)
+                    if ok and winner is None:
+                        winner = {"provider": name, "streams": streams}
+                if winner is not None:
+                    break
+        finally:
+            if pending:
+                for task in pending:
+                    task.cancel()
+        if winner is None:
+            return None
+        winner["timings"] = timings
+        winner["defaultProvider"] = AR_RANKING[0]
+        winner["lang"] = "ar"
+        return winner
+
     mods = providers()
     if not mods:
         return None
