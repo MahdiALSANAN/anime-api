@@ -521,14 +521,17 @@ async def extract_simple(
     episode: int = Query(1, alias="e"),
     audio: str = Query("sub", alias="type", description="sub or dub"),
     provider: str | None = Query(None, alias="provider", description="prefer one provider"),
+    lang: str = Query("en", alias="lang", description="language: en or ar"),
 ):
 
     audio = (audio or "sub").lower()
     if audio not in ("sub", "dub"):
         raise HTTPException(status_code=422, detail="type must be sub or dub")
+    lang = (lang or "en").lower()
     wanted = (provider or "").lower() or None
-    if wanted and wanted not in provider_race.RANKING:
-        raise HTTPException(status_code=422, detail=f"unknown provider '{provider}'. valid: {', '.join(provider_race.RANKING)}")
+    all_providers = provider_race.RANKING + provider_race.AR_RANKING
+    if wanted and wanted not in all_providers:
+        raise HTTPException(status_code=422, detail=f"unknown provider '{provider}'. valid: {', '.join(all_providers)}")
 
     if query.isdigit():
         anilist_id = int(query)
@@ -572,12 +575,13 @@ async def extract_simple(
             episode = 1
 
     try:
-        raced = await provider_race.race_watch(anilist_id, episode, audio, preferred=wanted)
+        raced = await provider_race.race_watch(anilist_id, episode, audio, preferred=wanted, lang=lang)
         if raced:
             result = {
                 "anilistId": anilist_id,
                 "episode": episode,
                 "type": audio,
+                "lang": raced.get("lang", lang),
                 "provider": raced["provider"],
                 "defaultProvider": raced.get("defaultProvider"),
                 "requestedProvider": raced.get("requestedProvider"),
