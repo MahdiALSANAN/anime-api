@@ -11,7 +11,7 @@ RANKING = [
 ]
 
 # Arabic-language providers — only called when lang="ar"
-AR_RANKING = ["witanime"]
+AR_RANKING = ["anime3rb"]
 
 WATCH_TIMEOUT = 75.0
 EPISODES_TIMEOUT = 60.0
