@@ -1,28 +1,20 @@
-
 import asyncio
 import importlib
 import time
-
 from src.providers._media import build_ctx
-
 RANKING = [
     "anineko", "anizone", "anikoto", "reanime", "aniwaves",
     "kaa", "anibd", "animegg", "mkissa", "animeonsen",
 ]
-
 # Arabic-language providers — only called when lang="ar"
-AR_RANKING = ["anime3rb"]
-
+AR_RANKING = ["anime_slayer"]
 WATCH_TIMEOUT = 75.0
 EPISODES_TIMEOUT = 60.0
 WATCH_CACHE_TTL = 45.0
-
 _latency: dict = {}
 _ep_latency: dict = {}
 _failures: dict = {}
 _watch_cache: dict = {}
-
-
 def _load(name):
     try:
         return importlib.import_module(f"src.providers.{name}")
@@ -33,8 +25,6 @@ def _load(name):
             flush=True
         )
         return None
-
-
 def providers():
     mods = []
     for name in RANKING:
@@ -42,11 +32,8 @@ def providers():
         if mod is not None:
             mods.append((name, mod))
     return mods
-
-
 def record_latency(name: str, seconds: float, ok: bool, kind: str = "watch"):
     table = _latency if kind == "watch" else _ep_latency
-
     if ok:
         prev = table.get(name)
         table[name] = (
@@ -57,18 +44,13 @@ def record_latency(name: str, seconds: float, ok: bool, kind: str = "watch"):
         _failures[name] = 0
     else:
         _failures[name] = _failures.get(name, 0) + 1
-
-
 def default_provider():
     if not _latency:
         return RANKING[0]
-
     return sorted(
         _latency.items(),
         key=lambda kv: kv[1]
     )[0][0]
-
-
 def latency_table() -> dict:
     return {
         name: {
@@ -78,41 +60,30 @@ def latency_table() -> dict:
         }
         for name in RANKING
     }
-
-
 async def _watch_one(mod, name, anilist_id, ep, audio, ctx):
     key = (name, anilist_id, ep, audio)
-
     hit = _watch_cache.get(key)
-
     if hit and hit[0] > time.time():
         return name, hit[1], 0.0, True
-
     t0 = time.time()
-
     try:
         streams = await asyncio.wait_for(
             mod.watch(anilist_id, audio, ep, ctx),
             WATCH_TIMEOUT
         )
-
         dt = round(time.time() - t0, 3)
-
         if streams:
             _watch_cache[key] = (
                 time.time() + WATCH_CACHE_TTL,
                 streams
             )
             return name, streams, dt, True
-
         print(
             f"[RACE] {name} returned no streams "
             f"(AniList={anilist_id}, episode={ep}, audio={audio})",
             flush=True
         )
-
         return name, None, dt, False
-
     except Exception as e:
         print(
             f"[RACE] {name} watch failed "
@@ -120,27 +91,19 @@ async def _watch_one(mod, name, anilist_id, ep, audio, ctx):
             f"{type(e).__name__}: {e}",
             flush=True
         )
-
         return (
             name,
             None,
             round(time.time() - t0, 3),
             False
         )
-
-
 def ar_providers():
     mods = []
-
     for name in AR_RANKING:
         mod = _load(name)
-
         if mod is not None:
             mods.append((name, mod))
-
     return mods
-
-
 async def race_watch(
     anilist_id: int,
     ep: int,
@@ -148,20 +111,16 @@ async def race_watch(
     preferred: str | None = None,
     lang: str = "en"
 ) -> dict | None:
-
     # Arabic requests go to AR_RANKING providers only
     if lang == "ar":
         mods = ar_providers()
-
         if not mods:
             print(
                 "[RACE] No Arabic providers available",
                 flush=True
             )
             return None
-
         ctx = await build_ctx(anilist_id)
-
         pending = {
             asyncio.ensure_future(
                 _watch_one(
@@ -175,46 +134,36 @@ async def race_watch(
             )
             for name, mod in mods
         }
-
         timings: dict = {}
         winner = None
-
         try:
             while pending:
                 done, pending = await asyncio.wait(
                     pending,
                     return_when=asyncio.FIRST_COMPLETED
                 )
-
                 for task in done:
                     name, streams, dt, ok = task.result()
-
                     timings[name] = {
                         "seconds": dt,
                         "ok": ok
                     }
-
                     record_latency(name, dt, ok)
-
                     if ok and winner is None:
                         winner = {
                             "provider": name,
                             "streams": streams
                         }
-
                 if winner is not None:
                     break
-
         finally:
             if pending:
                 for task in pending:
                     task.cancel()
-
                 await asyncio.gather(
                     *pending,
                     return_exceptions=True
                 )
-
         if winner is None:
             print(
                 f"[RACE] All Arabic providers failed "
@@ -222,27 +171,20 @@ async def race_watch(
                 flush=True
             )
             return None
-
         winner["timings"] = timings
         winner["defaultProvider"] = AR_RANKING[0]
         winner["lang"] = "ar"
-
         return winner
-
     # English providers
     mods = providers()
-
     if not mods:
         return None
-
     ctx = await build_ctx(anilist_id)
-
     if preferred:
         pick = next(
             (m for m in mods if m[0] == preferred),
             None
         )
-
         if pick is not None:
             name, streams, dt, ok = await _watch_one(
                 pick[1],
@@ -252,9 +194,7 @@ async def race_watch(
                 audio,
                 ctx
             )
-
             record_latency(name, dt, ok)
-
             if ok:
                 return {
                     "provider": name,
@@ -268,15 +208,12 @@ async def race_watch(
                     },
                     "defaultProvider": default_provider()
                 }
-
             mods = [
                 m for m in mods
                 if m[0] != preferred
             ]
-
             if not mods:
                 return None
-
     pending = {
         asyncio.ensure_future(
             _watch_one(
@@ -290,36 +227,28 @@ async def race_watch(
         )
         for name, mod in mods
     }
-
     timings: dict = {}
     winner = None
-
     try:
         while pending:
             done, pending = await asyncio.wait(
                 pending,
                 return_when=asyncio.FIRST_COMPLETED
             )
-
             for task in done:
                 name, streams, dt, ok = task.result()
-
                 timings[name] = {
                     "seconds": dt,
                     "ok": ok
                 }
-
                 record_latency(name, dt, ok)
-
                 if ok and winner is None:
                     winner = {
                         "provider": name,
                         "streams": streams
                     }
-
             if winner is not None:
                 break
-
     finally:
         if pending:
             try:
@@ -327,135 +256,99 @@ async def race_watch(
                     pending,
                     timeout=8.0
                 )
-
                 for task in done2:
                     try:
                         name, streams, dt, ok = task.result()
-
                         timings[name] = {
                             "seconds": dt,
                             "ok": ok
                         }
-
                         record_latency(name, dt, ok)
-
                     except Exception as e:
                         print(
                             f"[RACE] Remaining task failed: {e}",
                             flush=True
                         )
-
                 pending = pending2
-
             finally:
                 for task in pending:
                     task.cancel()
-
                 await asyncio.gather(
                     *pending,
                     return_exceptions=True
                 )
-
     if winner is None:
         return None
-
     winner["timings"] = timings
     winner["defaultProvider"] = default_provider()
-
     if preferred:
         winner["requestedProvider"] = preferred
-
     return winner
-
-
 async def _episodes_one(mod, name, anilist_id, ctx):
     t0 = time.time()
-
     try:
         data = await asyncio.wait_for(
             mod.get_episodes(anilist_id, ctx),
             EPISODES_TIMEOUT
         )
-
         eps = data.get("episodes") or {}
-
         count = sum(
             len(v)
             for v in eps.values()
             if isinstance(v, list)
         )
-
         record_latency(
             name,
             time.time() - t0,
             count > 0,
             kind="episodes"
         )
-
         return name, data if count > 0 else None
-
     except Exception as e:
         print(
             f"[RACE] {name} episodes failed: "
             f"{type(e).__name__}: {e}",
             flush=True
         )
-
         record_latency(
             name,
             time.time() - t0,
             False,
             kind="episodes"
         )
-
         return name, None
-
-
 async def merged_episodes(anilist_id: int) -> dict | None:
     mods = providers()
-
     if not mods:
         return None
-
     ctx = await build_ctx(anilist_id)
-
     results = await asyncio.gather(
         *[
             _episodes_one(mod, name, anilist_id, ctx)
             for name, mod in mods
         ]
     )
-
     merged = {
         name: data
         for name, data in results
         if data
     }
-
     if not merged:
         return None
-
     return {
         "anilistId": anilist_id,
         "source": "native",
         "providers": merged
     }
-
-
 def merge_subtitles(streams: list) -> list:
     seen, out = set(), []
-
     for s in streams or []:
         for sub in s.get("subtitles") or []:
             url = sub.get("url")
-
             if url and url not in seen:
                 seen.add(url)
                 out.append(sub)
-
     return out
-
-
 def providers_status() -> dict:
     return {
         "defaultProvider": default_provider(),
