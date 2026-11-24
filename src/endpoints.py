@@ -1,3 +1,4 @@
+
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 import httpx
@@ -16,9 +17,8 @@ router = APIRouter()
 async def search_anime(
     query: str,
     page: int = Query(1, ge=1, description="page number"),
-    per_page: int = Query(20, ge=1, le=50, description="results per page"),
+    per_page: int = Query(20, ge=1, le=50),
 ):
-
     gql = f"""
     query ($search: String, $page: Int, $perPage: Int) {{
         Page(page: $page, perPage: $perPage) {{
@@ -47,7 +47,6 @@ async def search_anime(
 async def search_suggestions(
     query: str = Query(..., min_length=1, description="small search query for dropdowns"),
 ):
-
     gql = """
     query ($search: String) {
         Page(page: 1, perPage: 8) {
@@ -79,6 +78,7 @@ async def search_suggestions(
         })
     return proxy_deep_images({"suggestions": results})
 
+
 SORT_MAP = {
     "SCORE_DESC": "SCORE_DESC",
     "POPULARITY_DESC": "POPULARITY_DESC",
@@ -101,7 +101,6 @@ async def filter_anime(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=50),
 ):
-
     args = ["type: ANIME", f"sort: [{SORT_MAP.get(sort, 'POPULARITY_DESC')}]"]
     variables = {"page": page, "perPage": per_page}
 
@@ -191,7 +190,6 @@ async def _fetch_collection(sort_type: str, status: str = None, page: int = 1, p
 
 @router.get("/spotlight")
 async def get_spotlight():
-
     gql = f"""
     query {{
         Page(page: 1, perPage: 10) {{
@@ -208,31 +206,26 @@ async def get_spotlight():
 
 @router.get("/trending")
 async def get_trending(page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=50)):
-
     return await _fetch_collection("TRENDING_DESC", page=page, per_page=per_page)
 
 
 @router.get("/popular")
 async def get_popular(page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=50)):
-
     return await _fetch_collection("POPULARITY_DESC", page=page, per_page=per_page)
 
 
 @router.get("/upcoming")
 async def get_upcoming(page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=50)):
-
     return await _fetch_collection("POPULARITY_DESC", "NOT_YET_RELEASED", page=page, per_page=per_page)
 
 
 @router.get("/recent")
 async def get_recent(page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=50)):
-
     return await _fetch_collection("START_DATE_DESC", "RELEASING", page=page, per_page=per_page)
 
 
 @router.get("/schedule")
 async def get_schedule(page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=50)):
-
     gql = f"""
     query ($page: Int, $perPage: Int) {{
         Page(page: $page, perPage: $perPage) {{
@@ -272,7 +265,6 @@ async def get_schedule(page: int = Query(1, ge=1), per_page: int = Query(20, ge=
 
 @router.get("/info/{anilist_id}")
 async def get_anime_info(anilist_id: int):
-
     gql = f"""
     query ($id: Int) {{
         Media(id: $id, type: ANIME) {{
@@ -293,7 +285,6 @@ async def get_anime_characters(
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=1, le=50),
 ):
-
     gql = """
     query ($id: Int, $page: Int, $perPage: Int) {
         Media(id: $id, type: ANIME) {
@@ -345,7 +336,6 @@ async def get_anime_characters(
 
 @router.get("/anime/{anilist_id}/relations")
 async def get_anime_relations(anilist_id: int):
-
     gql = """
     query ($id: Int) {
         Media(id: $id, type: ANIME) {
@@ -393,7 +383,6 @@ async def get_anime_recommendations(
     page: int = Query(1, ge=1),
     per_page: int = Query(10, ge=1, le=25),
 ):
-
     gql = """
     query ($id: Int, $page: Int, $perPage: Int) {
         Media(id: $id, type: ANIME) {
@@ -414,7 +403,6 @@ async def get_anime_recommendations(
                         meanScore
                         averageScore
                         popularity
-                        genres
                         startDate { year }
                     }
                 }
@@ -442,32 +430,29 @@ async def get_anime_recommendations(
 
 @router.get("/episodes/{anilist_id}")
 async def get_episodes(anilist_id: int):
-
     try:
         native = await provider_race.merged_episodes(anilist_id)
         if native:
             return proxy_deep_images(native)
     except Exception as e:
-        print(f"[KUHI API] native episodes failed, falling back to pipe: {e}")
+        print(f"[KUHI API] native episodes failed, falling back to pipe: {e}", flush=True)
+
     data = await fetch_raw_episodes(anilist_id)
     return proxy_deep_images(inject_source_slugs(data, anilist_id))
 
 
 @router.get("/providers/status")
 async def get_providers_status():
-
     return provider_race.providers_status()
 
 
 @router.get("/bridge-status")
 async def get_bridge_status():
-
     return provider_race.providers_status()
 
 
 @router.get("/genres")
 async def get_genres():
-
     gql = """
     query {
         GenreCollection
@@ -484,7 +469,6 @@ async def get_sources(
     anilistId: int = Query(..., description="anime db identification code"),
     category: str = Query("sub", description="dubbed or subbed version"),
 ):
-
     enc_id = base64.urlsafe_b64encode(episodeId.encode()).decode().rstrip('=')
     payload = {
         "path": "sources",
@@ -503,14 +487,14 @@ async def get_sources(
     async with httpx.AsyncClient(timeout=15.0) as client:
         last_status = None
         for pipe_target, headers in iter_miruro_pipe_targets(encoded_req):
-            print(f"\n[KUHI API] extracting stream sources pipe targeting:", pipe_target)
+            print(f"\n[KUHI API] extracting stream sources pipe targeting: {pipe_target}", flush=True)
             try:
                 res = await client.get(pipe_target, headers=headers)
                 last_status = res.status_code
                 if res.status_code == 200:
                     return proxy_deep_images(decode_pipe_response(res.text.strip()))
             except Exception as e:
-                print(f"[KUHI API] Failed to connect to {pipe_target}: {e}")
+                print(f"[KUHI API] Failed to connect to {pipe_target}: {e}", flush=True)
 
         raise HTTPException(status_code=last_status or 502, detail="fetching pipe failed real bad")
 
@@ -523,15 +507,21 @@ async def extract_simple(
     provider: str | None = Query(None, alias="provider", description="prefer one provider"),
     lang: str = Query("en", alias="lang", description="language: en or ar"),
 ):
-
     audio = (audio or "sub").lower()
     if audio not in ("sub", "dub"):
         raise HTTPException(status_code=422, detail="type must be sub or dub")
+
     lang = (lang or "en").lower()
+    if lang not in ("en", "ar"):
+        raise HTTPException(status_code=422, detail="lang must be en or ar")
+
     wanted = (provider or "").lower() or None
     all_providers = provider_race.RANKING + provider_race.AR_RANKING
     if wanted and wanted not in all_providers:
-        raise HTTPException(status_code=422, detail=f"unknown provider '{provider}'. valid: {', '.join(all_providers)}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown provider '{provider}'. valid: {', '.join(all_providers)}"
+        )
 
     if query.isdigit():
         anilist_id = int(query)
@@ -552,16 +542,15 @@ async def extract_simple(
         if media.get("format") == "MOVIE":
             episode = 1
     else:
-
-        gql = f"""
-        query ($search: String) {{
-            Page(page: 1, perPage: 1) {{
-                media(search: $search, type: ANIME, sort: SEARCH_MATCH) {{
+        gql = """
+        query ($search: String) {
+            Page(page: 1, perPage: 1) {
+                media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
                     id
                     format
-                }}
-            }}
-        }}
+                }
+            }
+        }
         """
         search_data = await anilist_query(gql, {"search": query.replace("-", " ")})
         media_list = search_data.get("Page", {}).get("media", [])
@@ -569,13 +558,18 @@ async def extract_simple(
             raise HTTPException(status_code=404, detail="anime not found")
 
         anilist_id = media_list[0]["id"]
-        media_format = media_list[0].get("format")
-
-        if media_format == "MOVIE":
+        if media_list[0].get("format") == "MOVIE":
             episode = 1
 
     try:
-        raced = await provider_race.race_watch(anilist_id, episode, audio, preferred=wanted, lang=lang)
+        raced = await provider_race.race_watch(
+            anilist_id,
+            episode,
+            audio,
+            preferred=wanted,
+            lang=lang
+        )
+
         if raced:
             result = {
                 "anilistId": anilist_id,
@@ -589,8 +583,33 @@ async def extract_simple(
                 "subtitles": provider_race.merge_subtitles(raced["streams"]),
             }
             return proxy_deep_images(result)
+
+        if lang == "ar":
+            print(
+                f"[KUHI API] Arabic provider returned no streams "
+                f"(AniList={anilist_id}, episode={episode})",
+                flush=True
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="WitAnime did not return an Arabic stream"
+            )
+
+    except HTTPException:
+        raise
+
     except Exception as e:
-        print(f"[KUHI API] native race failed, falling back to pipe: {e}")
+        print(
+            f"[KUHI API] native race failed "
+            f"(lang={lang}): {type(e).__name__}: {e}",
+            flush=True
+        )
+
+        if lang == "ar":
+            raise HTTPException(
+                status_code=502,
+                detail=f"Arabic provider failed: {type(e).__name__}: {e}"
+            )
 
     data = await fetch_raw_episodes(anilist_id)
     providers = data.get("providers", {})
@@ -661,22 +680,22 @@ async def extract_simple(
 
             async with httpx.AsyncClient(timeout=15.0) as client:
                 for pipe_target, headers in iter_miruro_pipe_targets(encoded_req):
-                    print(f"\n[KUHI API] trying provider {try_provider}: {pipe_target}")
+                    print(f"\n[KUHI API] trying provider {try_provider}: {pipe_target}", flush=True)
                     try:
                         res = await client.get(pipe_target, headers=headers)
 
                         if res.status_code == 200:
                             result = decode_pipe_response(res.text.strip())
-                            print(f"[KUHI API] success with provider {try_provider}")
+                            print(f"[KUHI API] success with provider {try_provider}", flush=True)
                             return proxy_deep_images(result)
 
                         last_error = f"{try_provider} failed: {res.status_code}"
-                        print(f"[KUHI API] {last_error}")
+                        print(f"[KUHI API] {last_error}", flush=True)
                     except Exception as e:
-                        print(f"[KUHI API] Failed to connect to {pipe_target}: {e}")
+                        print(f"[KUHI API] Failed to connect to {pipe_target}: {e}", flush=True)
         except Exception as e:
             last_error = f"{try_provider} error: {str(e)}"
-            print(f"[KUHI API] {last_error}")
+            print(f"[KUHI API] {last_error}", flush=True)
             continue
 
     if audio == "dub":
@@ -684,8 +703,12 @@ async def extract_simple(
             status_code=404,
             detail=f"no dub streams found for episode {episode}; try type=sub",
         )
-    raise HTTPException(status_code=500, detail=f"all providers failed. last error: {last_error}")
-    
+
+    raise HTTPException(
+        status_code=500,
+        detail=f"all providers failed. last error: {last_error}"
+    )
+
 
 # ---------------------------------------------------------------------------
 # sanime.net Arabic provider — direct MP4 stream by AniList ID
@@ -705,9 +728,21 @@ async def get_sanime_stream(
         97940:  {"id": 12012, "dir": "Video"},
         100146: {"id": 11950, "dir": "Video"},
     }
+
     entry = SANIME_MAP.get(anilist_id)
     if not entry:
-        raise HTTPException(status_code=404, detail=f"no sanime mapping for anilist_id={anilist_id}")
-    url = f"https://server.sanime.net/{entry['dir']}/{entry['id']}/{episode}.mp4"
-    return {"anilist_id": anilist_id, "sanime_id": entry["id"], "subdirectory": entry["dir"], "episode": episode, "url": url, "headers": {"Referer": "https://sanime.net/"}}
+        raise HTTPException(
+            status_code=404,
+            detail=f"no sanime mapping for anilist_id={anilist_id}"
+        )
 
+    url = f"https://server.sanime.net/{entry['dir']}/{entry['id']}/{episode}.mp4"
+
+    return {
+        "anilist_id": anilist_id,
+        "sanime_id": entry["id"],
+        "subdirectory": entry["dir"],
+        "episode": episode,
+        "url": url,
+        "headers": {"Referer": "https://sanime.net/"}
+    }
