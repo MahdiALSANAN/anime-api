@@ -34,6 +34,7 @@ from src.providers._match import (
 NAME = "anime_slayer"
 
 BASE_URL = "https://anslayer.com/anime/public/"
+
 MULTI_ENDPOINTS = [
     "https://anslayer.com/la/public/api/f2",
     "https://anslayer.com/la/public/api/f",
@@ -49,7 +50,8 @@ RNC_PASSWORD = b"android-app9>E>VBa=X%;[5BX~=Q~K"
 HEADERS = {
     "Client-Id": CLIENT_ID,
     "Client-Secret": CLIENT_SECRET,
-    "Accept": "application/json",
+    "Accept": "*/*",
+    "Content-Type": "application/json",
     "User-Agent": (
         "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -66,17 +68,23 @@ HLS_RE = re.compile(
 
 def _session():
     session = getattr(_local, "session", None)
+
     if session is None:
         session = requests.Session(
             impersonate="chrome120",
             timeout=12,
         )
         _local.session = session
+
     return session
 
 
 def _api_get(endpoint, params=None):
-    url = endpoint if endpoint.startswith("http") else BASE_URL + endpoint
+    url = (
+        endpoint
+        if endpoint.startswith("http")
+        else BASE_URL + endpoint
+    )
 
     try:
         response = _session().get(
@@ -85,25 +93,41 @@ def _api_get(endpoint, params=None):
             headers=HEADERS,
             timeout=12,
         )
+
         if response.status_code != 200:
+            body = (response.text or "")[:300]
+
             print(
-                f"[ANIME_SLAYER] API HTTP {response.status_code}: {url}",
+                f"[ANIME_SLAYER] API HTTP {response.status_code}: "
+                f"{url} | Response: {body}",
                 flush=True,
             )
             return None
 
-        return response.json()
+        try:
+            return response.json()
+        except Exception as exc:
+            print(
+                f"[ANIME_SLAYER] Invalid JSON from {url}: {exc}",
+                flush=True,
+            )
+            return None
 
     except Exception as exc:
         print(
-            f"[ANIME_SLAYER] API error: {type(exc).__name__}: {exc}",
+            f"[ANIME_SLAYER] API error: "
+            f"{type(exc).__name__}: {exc}",
             flush=True,
         )
         return None
 
 
 def _api_post(endpoint, data=None):
-    url = endpoint if endpoint.startswith("http") else BASE_URL + endpoint
+    url = (
+        endpoint
+        if endpoint.startswith("http")
+        else BASE_URL + endpoint
+    )
 
     try:
         response = _session().post(
@@ -117,13 +141,19 @@ def _api_post(endpoint, data=None):
         )
 
         if response.status_code != 200:
+            print(
+                f"[ANIME_SLAYER] POST HTTP "
+                f"{response.status_code}: {url}",
+                flush=True,
+            )
             return None
 
         return response.json()
 
     except Exception as exc:
         print(
-            f"[ANIME_SLAYER] POST error: {type(exc).__name__}: {exc}",
+            f"[ANIME_SLAYER] POST error: "
+            f"{type(exc).__name__}: {exc}",
             flush=True,
         )
         return None
@@ -150,15 +180,30 @@ def _response_items(data):
 
 
 def _search_sync(query):
+    query = str(query or "").strip()
+
+    if not query:
+        return []
+
+    # Match the payload used by the Tohru Anslayer client.
     payload = {
-        "list_type": "anime_list",
+        "_offset": 0,
+        "_limit": 30,
+        "_order_by": "anime_name_asc",
+        "list_type": "filter",
+        "just_info": "Yes",
         "anime_name": query,
-        "limit": 30,
     }
 
     data = _api_get(
         "animes/get-published-animes",
-        params={"json": json.dumps(payload, ensure_ascii=False)},
+        params={
+            "json": json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        },
     )
 
     results = []
@@ -168,7 +213,10 @@ def _search_sync(query):
         if not isinstance(item, dict):
             continue
 
-        anime_id = str(item.get("anime_id") or "").strip()
+        anime_id = str(
+            item.get("anime_id") or ""
+        ).strip()
+
         if not anime_id or anime_id in seen:
             continue
 
@@ -185,15 +233,25 @@ def _search_sync(query):
             "text": str(title),
         })
 
+    print(
+        f"[ANIME_SLAYER] Search '{query}': "
+        f"{len(results)} result(s)",
+        flush=True,
+    )
+
     return results
 
 
 async def search(query):
     query = (query or "").strip()
+
     if not query:
         return []
 
-    return await asyncio.to_thread(_search_sync, query)
+    return await asyncio.to_thread(
+        _search_sync,
+        query,
+    )
 
 
 def _details_sync(anime_id):
@@ -210,8 +268,13 @@ def _details_sync(anime_id):
 def _parse_episode_number(value):
     try:
         return int(float(str(value).strip()))
+
     except (TypeError, ValueError):
-        match = re.search(r"\d+", str(value or ""))
+        match = re.search(
+            r"\d+",
+            str(value or ""),
+        )
+
         return int(match.group(0)) if match else 0
 
 
@@ -239,8 +302,10 @@ def _parse_episodes(details):
 
     if isinstance(raw, dict):
         items = raw.get("data", []) or []
+
     elif isinstance(raw, list):
         items = raw
+
     else:
         items = []
 
@@ -250,24 +315,33 @@ def _parse_episodes(details):
         if not isinstance(item, dict):
             continue
 
-        number = _parse_episode_number(item.get("episode_number"))
+        number = _parse_episode_number(
+            item.get("episode_number")
+        )
+
         if number < 1:
             continue
 
         servers = item.get("episode_urls") or []
+
         if isinstance(servers, dict):
             servers = [servers]
 
         episodes.append({
             "number": number,
-            "title": _clean_episode_title(
-                item.get("episode_name"),
-                number,
-            ) or f"Episode {number}",
+            "title": (
+                _clean_episode_title(
+                    item.get("episode_name"),
+                    number,
+                )
+                or f"Episode {number}"
+            ),
             "servers": servers,
         })
 
-    episodes.sort(key=lambda item: item["number"])
+    episodes.sort(
+        key=lambda item: item["number"]
+    )
 
     unique = []
     seen = set()
@@ -275,6 +349,7 @@ def _parse_episodes(details):
     for episode in episodes:
         if episode["number"] in seen:
             continue
+
         seen.add(episode["number"])
         unique.append(episode)
 
@@ -282,12 +357,16 @@ def _parse_episodes(details):
 
 
 async def scrape_series(slug):
-    data = await asyncio.to_thread(_details_sync, str(slug))
+    data = await asyncio.to_thread(
+        _details_sync,
+        str(slug),
+    )
 
     if not isinstance(data, dict):
         return []
 
     details = data.get("response")
+
     if not isinstance(details, dict):
         return []
 
@@ -319,10 +398,14 @@ def _resolve_cdn_sync(cdn_url):
             return results
 
         seed = seed_response.text.strip()
+
         if len(seed) < 10:
             return results
 
-        key_string = (seed[:10] + APK_CERT_SHA1[:22])[:16]
+        key_string = (
+            seed[:10] + APK_CERT_SHA1[:22]
+        )[:16]
+
         key = key_string.encode("utf-8")
 
         native_payload = json.dumps(
@@ -335,14 +418,23 @@ def _resolve_cdn_sync(cdn_url):
             separators=(",", ":"),
         )
 
-        cipher = AES.new(key, AES.MODE_ECB)
+        cipher = AES.new(
+            key,
+            AES.MODE_ECB,
+        )
+
         encrypted = cipher.encrypt(
-            pad(native_payload.encode("utf-8"), 16)
+            pad(
+                native_payload.encode("utf-8"),
+                16,
+            )
         )
 
         inf = json.dumps(
             {
-                "a": base64.b64encode(encrypted).decode("utf-8"),
+                "a": base64.b64encode(
+                    encrypted
+                ).decode("utf-8"),
                 "b": seed,
             },
             separators=(",", ":"),
@@ -357,15 +449,22 @@ def _resolve_cdn_sync(cdn_url):
             },
             headers={
                 **HEADERS,
-                "Content-Type": "application/x-www-form-urlencoded",
+                "Content-Type": (
+                    "application/x-www-form-urlencoded"
+                ),
             },
             timeout=10,
         )
 
-        if response.status_code != 200 or not response.text.strip():
+        if (
+            response.status_code != 200
+            or not response.text.strip()
+        ):
             return results
 
-        envelope = base64.b64decode(response.text.strip())
+        envelope = base64.b64decode(
+            response.text.strip()
+        )
 
         if len(envelope) <= 66:
             return results
@@ -374,7 +473,10 @@ def _resolve_cdn_sync(cdn_url):
         iv = envelope[18:34]
         ciphertext = envelope[34:-32]
 
-        if not ciphertext or len(ciphertext) % 16:
+        if (
+            not ciphertext
+            or len(ciphertext) % 16
+        ):
             return results
 
         encryption_key = hashlib.pbkdf2_hmac(
@@ -385,10 +487,20 @@ def _resolve_cdn_sync(cdn_url):
             32,
         )
 
-        aes = AES.new(encryption_key, AES.MODE_CBC, iv)
-        plaintext = unpad(aes.decrypt(ciphertext), 16)
+        aes = AES.new(
+            encryption_key,
+            AES.MODE_CBC,
+            iv,
+        )
 
-        stream_list = json.loads(plaintext.decode("utf-8"))
+        plaintext = unpad(
+            aes.decrypt(ciphertext),
+            16,
+        )
+
+        stream_list = json.loads(
+            plaintext.decode("utf-8")
+        )
 
         if not isinstance(stream_list, list):
             return results
@@ -398,6 +510,7 @@ def _resolve_cdn_sync(cdn_url):
                 continue
 
             url = item.get("file") or ""
+
             if not url.startswith("http"):
                 continue
 
@@ -405,16 +518,23 @@ def _resolve_cdn_sync(cdn_url):
 
             if "hh.mp4" in lower or "h.mp4" in lower:
                 resolution = "1080p"
+
             elif "s.mp4" in lower:
                 resolution = "720p"
+
             elif "m.mp4" in lower:
                 resolution = "480p"
+
             else:
                 resolution = _detect_resolution(url)
 
             results.append({
                 "url": url,
-                "type": "hls" if ".m3u8" in lower else "mp4",
+                "type": (
+                    "hls"
+                    if ".m3u8" in lower
+                    else "mp4"
+                ),
                 "resolution": resolution,
                 "server": "Anime Slayer CDN",
             })
@@ -432,13 +552,29 @@ def _resolve_cdn_sync(cdn_url):
 def _detect_resolution(url, default="720p"):
     value = (url or "").lower()
 
-    if "1080" in value or "fhd" in value or "hh.mp4" in value:
+    if (
+        "1080" in value
+        or "fhd" in value
+        or "hh.mp4" in value
+    ):
         return "1080p"
-    if "720" in value or re.search(r"[/_.-]h\.mp4", value):
+
+    if (
+        "720" in value
+        or re.search(r"[/_.-]h\.mp4", value)
+    ):
         return "720p"
-    if "480" in value or re.search(r"[/_.-]s\.mp4", value):
+
+    if (
+        "480" in value
+        or re.search(r"[/_.-]s\.mp4", value)
+    ):
         return "480p"
-    if "360" in value or re.search(r"[/_.-]m\.mp4", value):
+
+    if (
+        "360" in value
+        or re.search(r"[/_.-]m\.mp4", value)
+    ):
         return "360p"
 
     return default
@@ -448,15 +584,31 @@ def _canonical_key(url):
     value = (url or "").strip().lower()
 
     patterns = [
-        (r"mediafire\.com/(?:file/)?([a-z0-9]+)", "mediafire"),
-        (r"drive\.google\.com/(?:file/d/|open\?id=|uc\?id=)([a-z0-9_-]+)", "gdrive"),
-        (r"ok\.ru/(?:video/|videoembed/)(\d+)", "okru"),
-        (r"mp4upload\.com/(?:embed-)?([a-z0-9]+)", "mp4upload"),
-        (r"goodstream\.one/video/embed/([a-z0-9]+)", "goodstream"),
+        (
+            r"mediafire\.com/(?:file/)?([a-z0-9]+)",
+            "mediafire",
+        ),
+        (
+            r"drive\.google\.com/(?:file/d/|open\?id=|uc\?id=)([a-z0-9_-]+)",
+            "gdrive",
+        ),
+        (
+            r"ok\.ru/(?:video/|videoembed/)(\d+)",
+            "okru",
+        ),
+        (
+            r"mp4upload\.com/(?:embed-)?([a-z0-9]+)",
+            "mp4upload",
+        ),
+        (
+            r"goodstream\.one/video/embed/([a-z0-9]+)",
+            "goodstream",
+        ),
     ]
 
     for pattern, name in patterns:
         match = re.search(pattern, value)
+
         if match:
             return f"{name}:{match.group(1)}"
 
@@ -465,7 +617,11 @@ def _canonical_key(url):
 
 def _extract_mediafire(url):
     try:
-        response = _session().get(url, timeout=8)
+        response = _session().get(
+            url,
+            timeout=8,
+        )
+
         if response.status_code != 200:
             return None
 
@@ -476,7 +632,9 @@ def _extract_mediafire(url):
         )
 
         if match:
-            return html.unescape(match.group(1))
+            return html.unescape(
+                match.group(1)
+            )
 
         match = re.search(
             r'href=["\'](https?://download[^"\']+)',
@@ -484,7 +642,11 @@ def _extract_mediafire(url):
             re.IGNORECASE,
         )
 
-        return html.unescape(match.group(1)) if match else None
+        return (
+            html.unescape(match.group(1))
+            if match
+            else None
+        )
 
     except Exception:
         return None
@@ -492,14 +654,21 @@ def _extract_mediafire(url):
 
 def _extract_gdrive(url):
     match = (
-        re.search(r"/file/d/([a-zA-Z0-9_-]+)", url)
-        or re.search(r"[?&]id=([a-zA-Z0-9_-]+)", url)
+        re.search(
+            r"/file/d/([a-zA-Z0-9_-]+)",
+            url,
+        )
+        or re.search(
+            r"[?&]id=([a-zA-Z0-9_-]+)",
+            url,
+        )
     )
 
     if not match:
         return None
 
     file_id = match.group(1)
+
     direct = (
         "https://drive.google.com/uc"
         f"?export=download&id={file_id}"
@@ -513,13 +682,22 @@ def _extract_gdrive(url):
             allow_redirects=True,
         )
 
-        content_type = response.headers.get("Content-Type", "").lower()
+        content_type = response.headers.get(
+            "Content-Type",
+            "",
+        ).lower()
 
         if response.status_code in (200, 206):
-            if "video" in content_type or "octet-stream" in content_type:
+            if (
+                "video" in content_type
+                or "octet-stream" in content_type
+            ):
                 return response.url
 
-        if response.status_code == 200 and "drive.google.com" in response.url:
+        if (
+            response.status_code == 200
+            and "drive.google.com" in response.url
+        ):
             return direct
 
     except Exception:
@@ -530,7 +708,11 @@ def _extract_gdrive(url):
 
 def _extract_mp4upload(url):
     try:
-        response = _session().get(url, timeout=8)
+        response = _session().get(
+            url,
+            timeout=8,
+        )
+
         if response.status_code != 200:
             return None
 
@@ -540,9 +722,16 @@ def _extract_mp4upload(url):
         ]
 
         for pattern in patterns:
-            match = re.search(pattern, response.text, re.IGNORECASE)
+            match = re.search(
+                pattern,
+                response.text,
+                re.IGNORECASE,
+            )
+
             if match:
-                return html.unescape(match.group(1))
+                return html.unescape(
+                    match.group(1)
+                )
 
     except Exception:
         pass
@@ -552,19 +741,34 @@ def _extract_mp4upload(url):
 
 def _extract_hls(url):
     try:
-        response = _session().get(url, timeout=8)
+        response = _session().get(
+            url,
+            timeout=8,
+        )
+
         if response.status_code != 200:
             return None
 
-        match = HLS_RE.search(response.text)
-        return html.unescape(match.group(1)) if match else None
+        match = HLS_RE.search(
+            response.text
+        )
+
+        return (
+            html.unescape(match.group(1))
+            if match
+            else None
+        )
 
     except Exception:
         return None
 
 
 def _extract_okru(url):
-    match = re.search(r"/video/(\d+)", url)
+    match = re.search(
+        r"/video/(\d+)",
+        url,
+    )
+
     if not match:
         return None
 
@@ -585,10 +789,22 @@ def _extract_okru(url):
         if not match:
             return None
 
-        data = json.loads(html.unescape(match.group(1)))
+        data = json.loads(
+            html.unescape(match.group(1))
+        )
+
         videos = (
             data.get("videos")
-            or data.get("flashvars", {}).get("metadata", {}).get("videos", [])
+            or data.get(
+                "flashvars",
+                {},
+            ).get(
+                "metadata",
+                {},
+            ).get(
+                "videos",
+                [],
+            )
         )
 
         if videos:
@@ -604,13 +820,19 @@ def _multi_servers_sync(multi_url):
     results = []
 
     parsed = urlparse(multi_url)
-    params = urllib.parse.parse_qs(parsed.query)
+
+    params = urllib.parse.parse_qs(
+        parsed.query
+    )
+
     n_value = params.get("n", [""])[0]
 
     if not n_value:
         return results
 
-    all_links = set()
+    all_links = []
+    seen_links = set()
+
     session = _session()
 
     for endpoint in MULTI_ENDPOINTS:
@@ -629,8 +851,13 @@ def _multi_servers_sync(multi_url):
 
             if isinstance(data, list):
                 for item in data:
-                    if isinstance(item, str) and item.startswith("http"):
-                        all_links.add(item)
+                    if (
+                        isinstance(item, str)
+                        and item.startswith("http")
+                        and item not in seen_links
+                    ):
+                        seen_links.add(item)
+                        all_links.append(item)
 
         except Exception:
             continue
@@ -646,6 +873,7 @@ def _multi_servers_sync(multi_url):
         seen.add(key)
 
         lower = link.lower()
+
         direct = None
         server = "Anime Slayer"
 
@@ -669,32 +897,39 @@ def _multi_servers_sync(multi_url):
             direct = _extract_hls(link) or link
             server = "Goodstream"
 
-        elif any(host in lower for host in (
-            "streamtape",
-            "mixdrop",
-            "uptostream",
-            "vinovo",
-            "dood",
-            "filemoon",
-            "pixeldrain",
-            "lulustream",
-            "vidmoly",
-            "streamwish",
-            "filelions",
-        )):
+        elif any(
+            host in lower
+            for host in (
+                "streamtape",
+                "mixdrop",
+                "uptostream",
+                "vinovo",
+                "dood",
+                "filemoon",
+                "pixeldrain",
+                "lulustream",
+                "vidmoly",
+                "streamwish",
+                "filelions",
+            )
+        ):
             direct = link
             server = urlparse(link).netloc
 
         if not direct:
             continue
 
-        resolution = _detect_resolution(direct)
+        resolution = _detect_resolution(
+            direct
+        )
 
         results.append({
             "url": direct,
             "type": (
-                "hls" if ".m3u8" in direct.lower()
-                else "mp4" if ".mp4" in direct.lower()
+                "hls"
+                if ".m3u8" in direct.lower()
+                else "mp4"
+                if ".mp4" in direct.lower()
                 else "embed"
             ),
             "resolution": resolution,
@@ -706,6 +941,7 @@ def _multi_servers_sync(multi_url):
 
 async def _extract_episode_streams(episode):
     servers = episode.get("servers") or []
+
     cdn_jobs = []
     multi_jobs = []
 
@@ -713,20 +949,38 @@ async def _extract_episode_streams(episode):
         if not isinstance(server, dict):
             continue
 
-        name = str(server.get("episode_server_name") or "").lower().strip()
-        url = str(server.get("episode_url") or "").strip()
+        name = str(
+            server.get("episode_server_name") or ""
+        ).lower().strip()
+
+        url = str(
+            server.get("episode_url") or ""
+        ).strip()
 
         if not url:
             continue
 
-        if name == "cdn" or "vq.php" in url or "v-qs.php" in url:
+        if (
+            name == "cdn"
+            or "vq.php" in url
+            or "v-qs.php" in url
+        ):
             cdn_jobs.append(
-                asyncio.to_thread(_resolve_cdn_sync, url)
+                asyncio.to_thread(
+                    _resolve_cdn_sync,
+                    url,
+                )
             )
 
-        elif name == "muilt" or "/api/f" in url:
+        elif (
+            name == "muilt"
+            or "/api/f" in url
+        ):
             multi_jobs.append(
-                asyncio.to_thread(_multi_servers_sync, url)
+                asyncio.to_thread(
+                    _multi_servers_sync,
+                    url,
+                )
             )
 
         elif url.startswith("http"):
@@ -742,8 +996,13 @@ async def _extract_episode_streams(episode):
                 )
             )
 
+    jobs = cdn_jobs + multi_jobs
+
+    if not jobs:
+        return []
+
     groups = await asyncio.gather(
-        *(cdn_jobs + multi_jobs),
+        *jobs,
         return_exceptions=True,
     )
 
@@ -756,6 +1015,7 @@ async def _extract_episode_streams(episode):
 
         for item in group or []:
             url = item.get("url")
+
             if not url or url in seen:
                 continue
 
@@ -771,7 +1031,10 @@ async def _extract_episode_streams(episode):
     }
 
     streams.sort(
-        key=lambda item: rank.get(item.get("resolution"), 0),
+        key=lambda item: rank.get(
+            item.get("resolution"),
+            0,
+        ),
         reverse=True,
     )
 
@@ -779,28 +1042,48 @@ async def _extract_episode_streams(episode):
 
 
 async def resolve_series(anilist_id, ctx=None):
-    ctx = ctx or await build_ctx(anilist_id)
+    ctx = ctx or await build_ctx(
+        anilist_id
+    )
 
     key = f"np:anime_slayer:{anilist_id}"
-    hit = _cache.cached(key, _cache.SHOW_IDENTITY_TTL)
+
+    hit = _cache.cached(
+        key,
+        _cache.SHOW_IDENTITY_TTL,
+    )
 
     if hit is not None:
         return hit
 
     media = ctx["media"]
-    titles = build_titles(media, ctx.get("anizip"))
 
-    candidates = await find_top_slugs(titles, search)
+    titles = build_titles(
+        media,
+        ctx.get("anizip"),
+    )
+
+    candidates = await find_top_slugs(
+        titles,
+        search,
+    )
 
     if not candidates:
         raise RuntimeError(
-            f"Anime Slayer search found no results for AniList {anilist_id}"
+            f"Anime Slayer search found no results "
+            f"for AniList {anilist_id}"
         )
 
-    expected = expected_count(media, ctx.get("anizip"))
+    expected = expected_count(
+        media,
+        ctx.get("anizip"),
+    )
 
     try:
-        offset = await get_prequel_offset(anilist_id)
+        offset = await get_prequel_offset(
+            anilist_id
+        )
+
     except Exception:
         offset = 0
 
@@ -814,7 +1097,8 @@ async def resolve_series(anilist_id, ctx=None):
 
     if not selected:
         raise RuntimeError(
-            f"Anime Slayer match not confident for AniList {anilist_id}"
+            f"Anime Slayer match not confident "
+            f"for AniList {anilist_id}"
         )
 
     result = {
@@ -825,11 +1109,22 @@ async def resolve_series(anilist_id, ctx=None):
         "score": selected["score"],
     }
 
-    _cache.set(key, result, _cache.SHOW_IDENTITY_TTL)
+    _cache.set(
+        key,
+        result,
+        _cache.SHOW_IDENTITY_TTL,
+    )
+
     return result
 
 
-def _build_episode_lists(anilist_id, series, provider_eps, ctx, expected):
+def _build_episode_lists(
+    anilist_id,
+    series,
+    provider_eps,
+    ctx,
+    expected,
+):
     sub = []
 
     for source in provider_eps:
@@ -845,10 +1140,16 @@ def _build_episode_lists(anilist_id, series, provider_eps, ctx, expected):
         if expected and number > expected:
             continue
 
-        meta = episode_meta(number, ctx)
+        meta = episode_meta(
+            number,
+            ctx,
+        )
 
         sub.append({
-            "id": f"watch/anime_slayer/{anilist_id}/sub/anime-slayer-{number}",
+            "id": (
+                f"watch/anime_slayer/{anilist_id}/"
+                f"sub/anime-slayer-{number}"
+            ),
             "number": number,
             "title": (
                 meta["title"]
@@ -872,20 +1173,35 @@ def _build_episode_lists(anilist_id, series, provider_eps, ctx, expected):
 
 
 async def get_episodes(anilist_id, ctx=None):
-    ctx = ctx or await build_ctx(anilist_id)
+    ctx = ctx or await build_ctx(
+        anilist_id
+    )
 
     media = ctx["media"]
-    series = await resolve_series(anilist_id, ctx)
-    episodes = await scrape_series(series["slug"])
 
-    expected = expected_count(media, ctx.get("anizip"))
+    series = await resolve_series(
+        anilist_id,
+        ctx,
+    )
+
+    episodes = await scrape_series(
+        series["slug"]
+    )
+
+    expected = expected_count(
+        media,
+        ctx.get("anizip"),
+    )
 
     return {
         "meta": {
             "id": series["slug"],
             "title": series["title"],
             "source": NAME,
-            "matchScore": round(series["score"], 3),
+            "matchScore": round(
+                series["score"],
+                3,
+            ),
             "numbering": series["mode"],
             "episodeOffset": (
                 series["offset"]
@@ -903,13 +1219,23 @@ async def get_episodes(anilist_id, ctx=None):
     }
 
 
-async def watch(anilist_id, audio, ep, ctx=None):
+async def watch(
+    anilist_id,
+    audio,
+    ep,
+    ctx=None,
+):
     if audio == "dub":
         return []
 
-    ctx = ctx or await build_ctx(anilist_id)
+    ctx = ctx or await build_ctx(
+        anilist_id
+    )
 
-    series = await resolve_series(anilist_id, ctx)
+    series = await resolve_series(
+        anilist_id,
+        ctx,
+    )
 
     provider_number = (
         int(ep) + series["offset"]
@@ -917,11 +1243,14 @@ async def watch(anilist_id, audio, ep, ctx=None):
         else int(ep)
     )
 
-    episodes = await scrape_series(series["slug"])
+    episodes = await scrape_series(
+        series["slug"]
+    )
 
     target = next(
         (
-            item for item in episodes
+            item
+            for item in episodes
             if item["number"] == provider_number
         ),
         None,
@@ -929,11 +1258,13 @@ async def watch(anilist_id, audio, ep, ctx=None):
 
     if target is None:
         raise RuntimeError(
-            f"Anime Slayer episode {provider_number} not found "
-            f"for AniList {anilist_id}"
+            f"Anime Slayer episode {provider_number} "
+            f"not found for AniList {anilist_id}"
         )
 
-    extracted = await _extract_episode_streams(target)
+    extracted = await _extract_episode_streams(
+        target
+    )
 
     streams = []
 
@@ -942,6 +1273,7 @@ async def watch(anilist_id, audio, ep, ctx=None):
         stream_type = item["type"]
 
         parsed = urlparse(url)
+
         referer = (
             f"{parsed.scheme}://{parsed.netloc}/"
             if parsed.scheme and parsed.netloc
@@ -951,10 +1283,20 @@ async def watch(anilist_id, audio, ep, ctx=None):
         streams.append({
             "url": url,
             "type": stream_type,
-            "embed": url if stream_type == "embed" else None,
+            "embed": (
+                url
+                if stream_type == "embed"
+                else None
+            ),
             "audio": "sub",
-            "server": item.get("server") or "Anime Slayer",
-            "quality": item.get("resolution") or "Auto",
+            "server": (
+                item.get("server")
+                or "Anime Slayer"
+            ),
+            "quality": (
+                item.get("resolution")
+                or "Auto"
+            ),
             "priority": len(extracted) - index,
             "referer": referer,
             "isActive": index == 0,
