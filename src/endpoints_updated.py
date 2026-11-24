@@ -701,17 +701,19 @@ async def get_sanime_stream(
     Mapping: AniList ID -> sanime internal ID + subdirectory.
     URL pattern: https://server.sanime.net/{dir}/{id}/{episode}.mp4
     """
-    # AniList ID -> {"id": <sanime_id>, "dirs": [<primary_dir>, ...fallbacks]}
+    # AniList ID -> {"id": <sanime_id>, "dir": <subdirectory>}
     # URL pattern: https://server.sanime.net/{dir}/{id}/{episode}.mp4
     # Directories confirmed from OtakuTime/sanime app: Video, Video2, Video3
+    # Note: server.sanime.net returns 200 on HEAD for any path — probing is unreliable.
+    # Use the confirmed dir from OtakuTime traffic capture.
     SANIME_MAP: dict[int, dict] = {
-        20:     {"id": 512,   "dirs": ["Video2", "Video"]},          # Naruto (2002)
-        21:     {"id": 532,   "dirs": ["Video2", "Video"]},          # One Piece — confirmed Video2 ep1189
-        11061:  {"id": 669,   "dirs": ["Video3", "Video2", "Video"]}, # Hunter x Hunter (2011)
-        235:    {"id": 653,   "dirs": ["Video", "Video2"]},          # Detective Conan / Case Closed
-        142592: {"id": 11989, "dirs": ["Video", "Video2"]},          # Bleach: TYBW
-        97940:  {"id": 12012, "dirs": ["Video", "Video2"]},          # Black Clover S2 (2026)
-        100146: {"id": 11950, "dirs": ["Video", "Video2"]},          # Black Torch (2026)
+        20:     {"id": 512,   "dir": "Video2"},   # Naruto (2002)
+        21:     {"id": 532,   "dir": "Video2"},   # One Piece — confirmed Video2 from OtakuTime ep1189
+        11061:  {"id": 669,   "dir": "Video3"},   # Hunter x Hunter (2011)
+        235:    {"id": 653,   "dir": "Video"},    # Detective Conan / Case Closed
+        142592: {"id": 11989, "dir": "Video"},    # Bleach: TYBW
+        97940:  {"id": 12012, "dir": "Video"},    # Black Clover S2 (2026)
+        100146: {"id": 11950, "dir": "Video"},    # Black Torch (2026)
         # Add more entries here as new anime are confirmed
     }
 
@@ -723,41 +725,13 @@ async def get_sanime_stream(
                    f"Known IDs: {sorted(SANIME_MAP.keys())}",
         )
 
-    sanime_id = entry["id"]
-    dirs = entry["dirs"]
-
-    # Try each directory in order — return first one that responds with 200
-    import httpx
-    working_dir: str | None = None
-    working_url: str | None = None
-
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        for d in dirs:
-            candidate = f"https://server.sanime.net/{d}/{sanime_id}/{episode}.mp4"
-            try:
-                r = await client.head(
-                    candidate,
-                    headers={"Referer": "https://sanime.net/", "User-Agent": "okhttp/4.12.0"},
-                    follow_redirects=True,
-                )
-                if r.status_code == 200:
-                    working_dir = d
-                    working_url = candidate
-                    break
-            except Exception:
-                continue
-
-    # Fallback: if HEAD checks failed (server may block HEAD), use primary dir
-    if not working_url:
-        working_dir = dirs[0]
-        working_url = f"https://server.sanime.net/{working_dir}/{sanime_id}/{episode}.mp4"
-
+    url = f"https://server.sanime.net/{entry['dir']}/{entry['id']}/{episode}.mp4"
     return {
         "anilist_id":   anilist_id,
-        "sanime_id":    sanime_id,
-        "subdirectory": working_dir,
+        "sanime_id":    entry["id"],
+        "subdirectory": entry["dir"],
         "episode":      episode,
-        "url":          working_url,
+        "url":          url,
         "headers": {
             "Referer": "https://sanime.net/",
         },
