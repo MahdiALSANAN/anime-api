@@ -24,7 +24,7 @@ from src.providers._media import build_ctx
 
 
 NAME = "witanime"
-BASE = "https://witanime.cyou"
+BASE = "https://witanime.site"
 LANG = "ar"
 
 
@@ -69,17 +69,24 @@ def _parse_anchors(html: str) -> list:
     try:
         parser.feed(html)
     except Exception as e:
-        print(f"[WITANIME] HTML parsing warning: {e}", flush=True)
+        print(
+            f"[WITANIME] HTML parsing warning: {e}",
+            flush=True
+        )
 
     return parser.anchors
 
 
 def _absolute_url(url: str) -> str:
-    return urljoin(BASE + "/", decode_entities(url.strip()))
+    return urljoin(
+        BASE + "/",
+        decode_entities(url.strip())
+    )
 
 
 def _slug_from_url(url: str, section: str):
     parsed = urlparse(_absolute_url(url))
+
     match = re.search(
         rf"/{re.escape(section)}/([^/?#]+)",
         parsed.path,
@@ -101,7 +108,12 @@ def _episode_number(value: str):
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, value, re.IGNORECASE)
+        match = re.search(
+            pattern,
+            value,
+            re.IGNORECASE
+        )
+
         if match:
             return int(match.group(1))
 
@@ -113,9 +125,15 @@ def _episode_number(value: str):
 # ---------------------------------------------------------
 
 async def search(query: str) -> list:
-    url = f"{BASE}/?search_param=animes&s={quote(query)}"
+    url = (
+        f"{BASE}/?search_param=animes"
+        f"&s={quote(query)}"
+    )
 
-    print(f"[WITANIME] Searching: {query}", flush=True)
+    print(
+        f"[WITANIME] Searching: {query}",
+        flush=True
+    )
 
     html = await fetch_text(
         url,
@@ -125,7 +143,14 @@ async def search(query: str) -> list:
         }
     )
 
+    print(
+        f"[WITANIME] Search page received: "
+        f"{len(html)} characters",
+        flush=True
+    )
+
     anchors = _parse_anchors(html)
+
     results = []
     seen = set()
 
@@ -155,9 +180,40 @@ async def search(query: str) -> list:
         })
 
     print(
-        f"[WITANIME] Search returned {len(results)} anime results",
+        f"[WITANIME] Search returned "
+        f"{len(results)} anime results",
         flush=True
     )
+
+    # Diagnostic output to identify the new site's HTML structure.
+    if not results:
+        print(
+            "[WITANIME] No /anime/ links found. "
+            "Sample links from search page:",
+            flush=True
+        )
+
+        for anchor in anchors[:20]:
+            print(
+                "[WITANIME] LINK:",
+                repr(anchor.get("href", "")),
+                "| TEXT:",
+                repr(anchor.get("text", "")[:100]),
+                flush=True
+            )
+
+        title_match = re.search(
+            r"<title[^>]*>(.*?)</title>",
+            html,
+            re.IGNORECASE | re.DOTALL
+        )
+
+        if title_match:
+            print(
+                "[WITANIME] Page title:",
+                strip_tags(title_match.group(1)).strip(),
+                flush=True
+            )
 
     return results
 
@@ -173,7 +229,10 @@ async def search_fn(query: str) -> list:
 async def scrape_series(slug: str) -> list:
     url = f"{BASE}/anime/{slug}/"
 
-    print(f"[WITANIME] Loading anime page: {url}", flush=True)
+    print(
+        f"[WITANIME] Loading anime page: {url}",
+        flush=True
+    )
 
     html = await fetch_text(
         url,
@@ -184,6 +243,7 @@ async def scrape_series(slug: str) -> list:
     )
 
     anchors = _parse_anchors(html)
+
     episodes = []
     seen = set()
 
@@ -197,10 +257,14 @@ async def scrape_series(slug: str) -> list:
         number = _episode_number(ep_slug)
 
         if number is None:
-            number = _episode_number(anchor.get("text", ""))
+            number = _episode_number(
+                anchor.get("text", "")
+            )
 
         if number is None:
-            number = _episode_number(anchor.get("title", ""))
+            number = _episode_number(
+                anchor.get("title", "")
+            )
 
         if number is None or number in seen:
             continue
@@ -223,12 +287,31 @@ async def scrape_series(slug: str) -> list:
 
         seen.add(number)
 
-    episodes.sort(key=lambda item: item["number"])
+    episodes.sort(
+        key=lambda item: item["number"]
+    )
 
     print(
-        f"[WITANIME] Found {len(episodes)} episodes for {slug}",
+        f"[WITANIME] Found {len(episodes)} episodes "
+        f"for {slug}",
         flush=True
     )
+
+    if not episodes:
+        print(
+            "[WITANIME] No episode links found. "
+            "Sample links from anime page:",
+            flush=True
+        )
+
+        for anchor in anchors[:20]:
+            print(
+                "[WITANIME] LINK:",
+                repr(anchor.get("href", "")),
+                "| TEXT:",
+                repr(anchor.get("text", "")[:100]),
+                flush=True
+            )
 
     return episodes
 
@@ -251,21 +334,27 @@ def _add_stream(
 
     if url.startswith("//"):
         url = "https:" + url
+
     elif url.startswith("/"):
         url = urljoin(BASE, url)
 
     if not url.startswith(("http://", "https://")):
         return
 
-    if any(item["url"] == url for item in streams):
+    if any(
+        item["url"] == url
+        for item in streams
+    ):
         return
 
     lower_url = url.lower()
 
     if ".m3u8" in lower_url:
         stream_type = "hls"
+
     elif ".mp4" in lower_url:
         stream_type = "mp4"
+
     else:
         stream_type = "embed"
 
@@ -273,8 +362,10 @@ def _add_stream(
 
     if "1080" in lower_url:
         quality = "1080p"
+
     elif "720" in lower_url:
         quality = "720p"
+
     elif "480" in lower_url:
         quality = "480p"
 
@@ -293,7 +384,10 @@ def _add_stream(
 async def scrape_episode_streams(ep_slug: str) -> list:
     url = f"{BASE}/episode/{ep_slug}/"
 
-    print(f"[WITANIME] Loading episode: {url}", flush=True)
+    print(
+        f"[WITANIME] Loading episode: {url}",
+        flush=True
+    )
 
     html = await fetch_text(
         url,
@@ -312,7 +406,11 @@ async def scrape_episode_streams(ep_slug: str) -> list:
     ]
 
     for pattern in direct_patterns:
-        for match in re.finditer(pattern, html, re.IGNORECASE):
+        for match in re.finditer(
+            pattern,
+            html,
+            re.IGNORECASE
+        ):
             _add_stream(
                 streams,
                 match.group(1),
@@ -329,7 +427,11 @@ async def scrape_episode_streams(ep_slug: str) -> list:
     ]
 
     for pattern in jw_patterns:
-        for match in re.finditer(pattern, html, re.IGNORECASE):
+        for match in re.finditer(
+            pattern,
+            html,
+            re.IGNORECASE
+        ):
             _add_stream(
                 streams,
                 match.group(1),
@@ -363,10 +465,19 @@ async def scrape_episode_streams(ep_slug: str) -> list:
     ]
 
     for pattern in data_patterns:
-        for match in re.finditer(pattern, html, re.IGNORECASE):
+        for match in re.finditer(
+            pattern,
+            html,
+            re.IGNORECASE
+        ):
             value = match.group(1)
 
-            if not value.startswith(("http://", "https://", "//", "/")):
+            if not value.startswith((
+                "http://",
+                "https://",
+                "//",
+                "/"
+            )):
                 continue
 
             _add_stream(
@@ -415,48 +526,73 @@ async def scrape_episode_streams(ep_slug: str) -> list:
 # Resolve anime
 # ---------------------------------------------------------
 
-async def resolve_series(anilist_id: int, ctx: dict | None = None) -> dict:
+async def resolve_series(
+    anilist_id: int,
+    ctx: dict | None = None
+) -> dict:
     ctx = ctx or await build_ctx(anilist_id)
 
     key = f"np:{NAME}:{anilist_id}"
-    hit = _cache.cached(key, _cache.SHOW_IDENTITY_TTL)
+
+    hit = _cache.cached(
+        key,
+        _cache.SHOW_IDENTITY_TTL
+    )
 
     if hit is not None:
         print(
-            f"[WITANIME] Using cached match for AniList {anilist_id}",
+            f"[WITANIME] Using cached match "
+            f"for AniList {anilist_id}",
             flush=True
         )
+
         return hit
 
     media = ctx["media"]
 
-    titles = build_titles(media, ctx.get("anizip"))
+    titles = build_titles(
+        media,
+        ctx.get("anizip")
+    )
 
     print(
         f"[WITANIME] Resolving AniList {anilist_id}",
         flush=True
     )
 
-    candidates = await find_top_slugs(titles, search_fn)
+    candidates = await find_top_slugs(
+        titles,
+        search_fn
+    )
 
     print(
-        f"[WITANIME] Found {len(candidates)} matching candidates",
+        f"[WITANIME] Found {len(candidates)} "
+        f"matching candidates",
         flush=True
     )
 
-    expected = expected_count(media, ctx.get("anizip"))
+    expected = expected_count(
+        media,
+        ctx.get("anizip")
+    )
 
     try:
-        offset = await get_prequel_offset(anilist_id)
+        offset = await get_prequel_offset(
+            anilist_id
+        )
+
     except Exception as e:
         print(
             f"[WITANIME] Prequel offset failed: {e}",
             flush=True
         )
+
         offset = 0
 
     is_single_movie = (
-        str((media or {}).get("format") or "").upper() == "MOVIE"
+        str(
+            (media or {}).get("format") or ""
+        ).upper() == "MOVIE"
         or expected == 1
     )
 
@@ -466,12 +602,15 @@ async def resolve_series(anilist_id: int, ctx: dict | None = None) -> dict:
         expected,
         media.get("status"),
         offset,
-        min_score=0.9 if is_single_movie else 0.6,
+        min_score=(
+            0.9 if is_single_movie else 0.6
+        ),
     )
 
     if not selected:
         raise RuntimeError(
-            f"witanime: no confident match found for AniList {anilist_id}"
+            f"witanime: no confident match found "
+            f"for AniList {anilist_id}"
         )
 
     data = {
@@ -484,11 +623,16 @@ async def resolve_series(anilist_id: int, ctx: dict | None = None) -> dict:
 
     print(
         f"[WITANIME] Matched: {data['title']} "
-        f"(slug={data['slug']}, score={data['score']})",
+        f"(slug={data['slug']}, "
+        f"score={data['score']})",
         flush=True
     )
 
-    _cache.set(key, data, _cache.SHOW_IDENTITY_TTL)
+    _cache.set(
+        key,
+        data,
+        _cache.SHOW_IDENTITY_TTL
+    )
 
     return data
 
@@ -519,7 +663,10 @@ def _build_lists(
         if expected and number > expected:
             continue
 
-        meta = episode_meta(number, ctx)
+        meta = episode_meta(
+            number,
+            ctx
+        )
 
         base = {
             "number": number,
@@ -539,7 +686,10 @@ def _build_lists(
 
         if src.get("hasSub"):
             sub.append({
-                "id": f"watch/{NAME}/{anilist_id}/sub/{NAME}-{number}",
+                "id": (
+                    f"watch/{NAME}/{anilist_id}/"
+                    f"sub/{NAME}-{number}"
+                ),
                 **base,
                 "audio": "sub",
                 "lang": LANG,
@@ -562,11 +712,20 @@ async def get_episodes(
     ctx = ctx or await build_ctx(anilist_id)
 
     media = ctx["media"]
-    series = await resolve_series(anilist_id, ctx)
 
-    episodes = await scrape_series(series["slug"])
+    series = await resolve_series(
+        anilist_id,
+        ctx
+    )
 
-    expected = expected_count(media, ctx.get("anizip"))
+    episodes = await scrape_series(
+        series["slug"]
+    )
+
+    expected = expected_count(
+        media,
+        ctx.get("anizip")
+    )
 
     return {
         "meta": {
@@ -574,7 +733,10 @@ async def get_episodes(
             "title": series["title"],
             "source": NAME,
             "lang": LANG,
-            "matchScore": round(series["score"], 3),
+            "matchScore": round(
+                series["score"],
+                3
+            ),
             "numbering": series["mode"],
             "episodeOffset": (
                 series["offset"]
@@ -601,12 +763,16 @@ async def watch(
     ctx = ctx or await build_ctx(anilist_id)
 
     print(
-        f"[WITANIME] Watch request: AniList={anilist_id}, "
+        f"[WITANIME] Watch request: "
+        f"AniList={anilist_id}, "
         f"episode={ep}, audio={audio}",
         flush=True
     )
 
-    series = await resolve_series(anilist_id, ctx)
+    series = await resolve_series(
+        anilist_id,
+        ctx
+    )
 
     provider_ep = (
         int(ep) + series["offset"]
@@ -614,7 +780,9 @@ async def watch(
         else int(ep)
     )
 
-    episodes = await scrape_series(series["slug"])
+    episodes = await scrape_series(
+        series["slug"]
+    )
 
     found = next(
         (
@@ -626,17 +794,19 @@ async def watch(
 
     if not found:
         raise RuntimeError(
-            f"witanime: episode {provider_ep} not found "
-            f"for AniList {anilist_id}; "
+            f"witanime: episode {provider_ep} "
+            f"not found for AniList {anilist_id}; "
             f"available episodes={len(episodes)}"
         )
 
-    streams = await scrape_episode_streams(found["epSlug"])
+    streams = await scrape_episode_streams(
+        found["epSlug"]
+    )
 
     if not streams:
         raise RuntimeError(
-            f"witanime: no playable stream links found "
-            f"for episode {provider_ep} "
+            f"witanime: no playable stream links "
+            f"found for episode {provider_ep} "
             f"(slug={found['epSlug']})"
         )
 
