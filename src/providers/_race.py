@@ -7,7 +7,7 @@ RANKING = [
     "kaa", "anibd", "animegg", "mkissa", "animeonsen",
 ]
 # Arabic-language providers — only called when lang="ar"
-AR_RANKING = ["anime_slayer"]
+AR_RANKING = ["witanime", "anime_slayer"]
 WATCH_TIMEOUT = 75.0
 EPISODES_TIMEOUT = 60.0
 WATCH_CACHE_TTL = 45.0
@@ -318,9 +318,16 @@ async def _episodes_one(mod, name, anilist_id, ctx):
         )
         return name, None
 async def merged_episodes(anilist_id: int) -> dict | None:
-    mods = providers()
+    """Return Arabic episode catalogs only.
+
+    The app already owns its anime catalog and metadata. This endpoint is
+    used to discover playable episode entries, so English-only providers
+    must never leak into this response.
+    """
+    mods = ar_providers()
     if not mods:
         return None
+
     ctx = await build_ctx(anilist_id)
     results = await asyncio.gather(
         *[
@@ -328,17 +335,28 @@ async def merged_episodes(anilist_id: int) -> dict | None:
             for name, mod in mods
         ]
     )
-    merged = {
-        name: data
-        for name, data in results
-        if data
-    }
+
+    merged = {}
+    for name, data in results:
+        if not data:
+            continue
+        meta = data.get("meta") or {}
+        # Provider allow-list plus an explicit language marker prevents
+        # accidental inclusion of an English catalog.
+        if name not in AR_RANKING:
+            continue
+        if meta.get("lang") != "ar":
+            continue
+        merged[name] = data
+
     if not merged:
         return None
+
     return {
         "anilistId": anilist_id,
-        "source": "native",
-        "providers": merged
+        "source": "arabic",
+        "lang": "ar",
+        "providers": merged,
     }
 def merge_subtitles(streams: list) -> list:
     seen, out = set(), []
