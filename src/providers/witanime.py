@@ -1,4 +1,3 @@
-
 """
 witanime.py — Arabic anime provider.
 Provides Arabic-subbed streams for ACEanime app.
@@ -1105,16 +1104,13 @@ def _build_lists(
         if number < 1:
             continue
 
-        if expected and number > expected:
-            continue
-
+        # تم إزالة شرط الحذف (expected) لعرض كل حلقات المصدر
         meta = episode_meta(number, ctx)
 
         base = {
             "number": number,
             "title": (
-                meta["title"]
-                or src.get("title")
+                src.get("title")
                 or f"الحلقة {number}"
             ),
             "duration": meta["duration"],
