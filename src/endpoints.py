@@ -450,4 +450,4 @@ async def get_episodes(anilist_id: int):
     except Exception as e:
         print(f"[KUHI API] native episodes failed, falling back to pipe: {e}")
     data = await fetch_raw_episodes(anilist_id)
-    return proxy_deep_images(inject_source_slugs(data
+    return proxy_deep_images(inject_source_slugs(data, anilist_id))
