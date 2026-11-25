@@ -1,8 +1,5 @@
-
 import logging
-from urllib.parse import urlsplit
-
-import httpx
+from curl_cffi.requests import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +25,8 @@ JSON_HEADERS = {
     "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
 }
 
-
-def _response_error(res: httpx.Response) -> RuntimeError:
-    """Build a diagnostic error without dumping an entire response."""
+def _response_error(res) -> RuntimeError:
     headers = res.headers
-
     server = headers.get("server", "unknown")
     cf_ray = headers.get("cf-ray", "none")
     content_type = headers.get("content-type", "unknown")
@@ -49,10 +43,8 @@ def _response_error(res: httpx.Response) -> RuntimeError:
         f"content-type={content_type} | "
         f"body={body}"
     )
-
     logger.warning("[HTTP] %s", message)
     return RuntimeError(message)
-
 
 async def fetch_text(
     url: str,
@@ -60,17 +52,20 @@ async def fetch_text(
     timeout: float = 20.0,
 ) -> str:
     request_headers = dict(HTML_HEADERS)
-
     if headers:
         request_headers.update(headers)
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout),
-        follow_redirects=True,
-    ) as client:
+    # استخدام curl_cffi مع محاكاة متصفح كروم لتجاوز حماية Cloudflare
+    async with AsyncSession() as session:
         try:
-            res = await client.get(url, headers=request_headers)
-        except httpx.HTTPError as exc:
+            res = await session.get(
+                url,
+                headers=request_headers,
+                timeout=timeout,
+                impersonate="chrome124",
+                allow_redirects=True
+            )
+        except Exception as exc:
             logger.warning("[HTTP] Request error for %s: %s", url, exc)
             raise RuntimeError(
                 f"Request failed for {url}: {type(exc).__name__}: {exc}"
@@ -81,24 +76,25 @@ async def fetch_text(
 
     return res.text
 
-
 async def fetch_json(
     url: str,
     headers: dict | None = None,
     timeout: float = 20.0,
 ):
     request_headers = dict(JSON_HEADERS)
-
     if headers:
         request_headers.update(headers)
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout),
-        follow_redirects=True,
-    ) as client:
+    async with AsyncSession() as session:
         try:
-            res = await client.get(url, headers=request_headers)
-        except httpx.HTTPError as exc:
+            res = await session.get(
+                url,
+                headers=request_headers,
+                timeout=timeout,
+                impersonate="chrome124",
+                allow_redirects=True
+            )
+        except Exception as exc:
             logger.warning("[HTTP] Request error for %s: %s", url, exc)
             raise RuntimeError(
                 f"Request failed for {url}: {type(exc).__name__}: {exc}"
