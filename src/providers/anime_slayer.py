@@ -32,6 +32,7 @@ from src.providers._match import (
 
 
 NAME = "anime_slayer"
+LANG = "ar"
 
 BASE_URL = "https://anslayer.com/anime/public/"
 
@@ -1198,6 +1199,7 @@ async def get_episodes(anilist_id, ctx=None):
             "id": series["slug"],
             "title": series["title"],
             "source": NAME,
+            "lang": LANG,
             "matchScore": round(
                 series["score"],
                 3,
