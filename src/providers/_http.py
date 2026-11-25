@@ -6,6 +6,10 @@ from curl_cffi.requests import AsyncSession
 
 logger = logging.getLogger(__name__)
 
+# ⚠️ ضع رابط الـ Cloudflare Worker الخاص بك هنا بين علامات التنصيص
+# مثال: WORKER_URL = "https://witanime-proxy.username.workers.dev"
+WORKER_URL = "https://witanime-proxy.97pbrzpbvr.workers.dev/" 
+
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -32,23 +36,24 @@ async def fetch_text(url: str, headers: dict | None = None, timeout: float = 20.
     if headers:
         request_headers.update(headers)
 
-    # إذا كان الطلب لموقع witanime، نمرره عبر بروكسي لتخطي حظر Cloudflare
+    # إذا كان الطلب لموقع witanime، نمرره عبر الـ Worker الخاص بك
     if "witanime.site" in url:
-        proxies = [
-            f"https://api.allorigins.win/raw?url={quote(url, safe='')}",
-            f"https://api.codetabs.com/v1/proxy?quest={quote(url, safe='')}",
-            f"https://corsproxy.io/?{quote(url, safe='')}"
-        ]
-        async with httpx.AsyncClient() as client:
-            for proxy_url in proxies:
+        if "ضع_رابط_الوركر_هنا" in WORKER_URL:
+            print("[PROXY ERROR] يرجى وضع رابط الـ Worker في ملف _http.py", flush=True)
+        else:
+            proxy_url = f"{WORKER_URL}?url={quote(url, safe='')}"
+            async with httpx.AsyncClient() as client:
                 try:
-                    res = await client.get(proxy_url, timeout=15.0)
-                    if res.status_code == 200 and "Just a moment" not in res.text:
+                    # نرسل الطلب للوسيط الخاص بك
+                    res = await client.get(proxy_url, timeout=30.0)
+                    if res.status_code == 200:
                         return res.text
-                except Exception:
-                    continue
+                    else:
+                        print(f"[PROXY ERROR] Status: {res.status_code} - {res.text[:100]}", flush=True)
+                except Exception as e:
+                    print(f"[PROXY ERROR] {e}", flush=True)
 
-    # الطريقة العادية (لمواقع أخرى)
+    # الطريقة العادية (لمواقع أخرى أو في حال فشل الوسيط)
     async with AsyncSession() as session:
         try:
             res = await session.get(
