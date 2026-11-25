@@ -448,6 +448,11 @@ async def get_episodes(anilist_id: int):
         if native:
             return proxy_deep_images(native)
     except Exception as e:
-        print(f"[KUHI API] native episodes failed, falling back to pipe: {e}")
-    data = await fetch_raw_episodes(anilist_id)
-    return proxy_deep_images(inject_source_slugs(data, anilist_id))
+        print(f"[KUHI API] Arabic episode providers failed: {type(e).__name__}: {e}")
+
+    # Arabic subtitles are mandatory for this endpoint. Never fall back to
+    # the generic pipe because it can return English-only providers.
+    raise HTTPException(
+        status_code=404,
+        detail="لا تتوفر حالياً حلقات بمصدر ترجمة عربية لهذا الأنمي.",
+    )
