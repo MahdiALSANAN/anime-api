@@ -447,7 +447,6 @@ async def get_episodes(anilist_id: int):
         native = await provider_race.merged_episodes(anilist_id)
         if native:
             return proxy_deep_images(native)
-        # DEBUG: providers رجعت None — ما في مزود عربي نجح
         raise HTTPException(
             status_code=503,
             detail={
@@ -469,5 +468,47 @@ async def get_episodes(anilist_id: int):
                 "traceback": traceback.format_exc(),
                 "anilist_id": anilist_id,
                 "debug": True,
+            }
+        )
+
+
+@router.get("/watch/{anilist_id}/{audio}/{ep}")
+async def watch_episode(
+    anilist_id: int,
+    audio: str,
+    ep: int,
+    lang: str = Query("ar", description="ar for Arabic providers, en for English"),
+    provider: Optional[str] = Query(None, description="preferred provider name"),
+):
+    try:
+        result = await provider_race.race_watch(
+            anilist_id=anilist_id,
+            ep=ep,
+            audio=audio,
+            preferred=provider,
+            lang=lang,
+        )
+        if not result:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "no_streams_found",
+                    "message": "all providers failed to return streams",
+                    "anilist_id": anilist_id,
+                    "episode": ep,
+                    "audio": audio,
+                }
+            )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": type(e).__name__,
+                "message": str(e),
+                "traceback": traceback.format_exc(),
             }
         )
