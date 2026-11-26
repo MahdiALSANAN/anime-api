@@ -447,12 +447,27 @@ async def get_episodes(anilist_id: int):
         native = await provider_race.merged_episodes(anilist_id)
         if native:
             return proxy_deep_images(native)
+        # DEBUG: providers رجعت None — ما في مزود عربي نجح
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "no_arabic_provider_succeeded",
+                "message": "merged_episodes returned None — all Arabic providers failed or returned non-Arabic content",
+                "anilist_id": anilist_id,
+                "debug": True,
+            }
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"[KUHI API] Arabic episode providers failed: {type(e).__name__}: {e}")
-
-    # Arabic subtitles are mandatory for this endpoint. Never fall back to
-    # the generic pipe because it can return English-only providers.
-    raise HTTPException(
-        status_code=404,
-        detail="لا تتوفر حالياً حلقات بمصدر ترجمة عربية لهذا الأنمي.",
-    )
+        import traceback
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": type(e).__name__,
+                "message": str(e),
+                "traceback": traceback.format_exc(),
+                "anilist_id": anilist_id,
+                "debug": True,
+            }
+        )
