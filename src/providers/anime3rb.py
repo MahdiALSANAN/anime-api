@@ -58,13 +58,11 @@ async def _search_site(query: str) -> list[dict]:
             seen.add(r["slug"])
             unique.append(r)
 
-    logger.debug("anime3rb: search '%s' → %d results", query, len(unique))
+    logger.warning("anime3rb: search '%s' → %d results", query, len(unique))
     return unique
-
 
 async def _search_fn(query: str) -> list[dict]:
     return await _search_site(query)
-
 
 async def _scrape_anime_page(slug: str) -> dict:
     url = f"{BASE}/titles/{slug}"
@@ -73,6 +71,8 @@ async def _scrape_anime_page(slug: str) -> dict:
     except Exception as e:
         logger.warning("anime3rb: anime page FAILED %s: %s", url, e)
         return {}
+
+    logger.warning("anime3rb: page HTML snippet slug=%s: %s", slug, html[:3000])
 
     soup = BeautifulSoup(html, "html.parser")
     episodes: list[dict] = []
@@ -115,9 +115,8 @@ async def _scrape_anime_page(slug: str) -> dict:
             unique.append(e)
     unique.sort(key=lambda e: e["ep"])
 
-    logger.warning("anime3rb: slug=%s found %d episodes (url=%s)", slug, len(unique), url)
+    logger.warning("anime3rb: slug=%s found %d episodes", slug, len(unique))
     return {"episodes": {"sub": unique}} if unique else {}
-
 
 async def _extract_streams(ep_url: str) -> list[dict]:
     try:
@@ -125,6 +124,9 @@ async def _extract_streams(ep_url: str) -> list[dict]:
     except Exception as e:
         logger.warning("anime3rb: ep page FAILED %s: %s", ep_url, e)
         return []
+
+    # ← التعديل: نطبع أول 3000 حرف من صفحة الحلقة
+    logger.warning("anime3rb: ep_page HTML snippet url=%s: %s", ep_url, html[:3000])
 
     streams: list[dict] = []
     seen_urls: set[str] = set()
@@ -170,6 +172,7 @@ async def _extract_streams(ep_url: str) -> list[dict]:
                 src = BASE + src
             try:
                 embed_html = await fetch_text(src, headers={"Referer": ep_url}, timeout=15.0)
+                logger.warning("anime3rb: embed HTML snippet url=%s: %s", src, embed_html[:2000])
                 for m3u8_url in re.findall(r'https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*', embed_html):
                     add_stream(m3u8_url)
                 for m in re.finditer(r'["\']?file["\']?\s*:\s*["\']([^"\']+\.m3u8[^"\']*)["\']', embed_html):
@@ -181,7 +184,6 @@ async def _extract_streams(ep_url: str) -> list[dict]:
     logger.warning("anime3rb: ep_url=%s → %d streams", ep_url, len(streams))
     return streams
 
-
 async def get_episodes(anilist_id: int, ctx: dict) -> dict:
     titles: list[str] = ctx.get("titles", [])
     if not titles:
@@ -189,7 +191,7 @@ async def get_episodes(anilist_id: int, ctx: dict) -> dict:
 
     top_slugs = await find_top_slugs(titles, _search_fn, n=6)
     if not top_slugs:
-        logger.debug("anime3rb: no slugs found for %s", titles)
+        logger.warning("anime3rb: no slugs found for %s", titles)
         return {}
 
     for entry in top_slugs:
@@ -198,7 +200,6 @@ async def get_episodes(anilist_id: int, ctx: dict) -> dict:
             return result
 
     return {}
-
 
 async def watch(anilist_id: int, audio: str, ep: int, ctx: dict) -> list[dict]:
     if audio not in ("sub", "ar"):
@@ -211,7 +212,7 @@ async def watch(anilist_id: int, audio: str, ep: int, ctx: dict) -> list[dict]:
         (e["url"] for e in fresh_sub if e["ep"] == ep), None
     )
     if not ep_url:
-        logger.debug("anime3rb: ep %s not found for id=%s", ep, anilist_id)
+        logger.warning("anime3rb: ep %s not found for id=%s, fresh_sub=%s", ep, anilist_id, fresh_sub[:5])
         return []
 
     streams = await _extract_streams(ep_url)
