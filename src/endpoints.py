@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 import httpx
 import base64
+import logging
 
 from src.queries import MEDIA_LIST_FIELDS, MEDIA_FULL_FIELDS
 from src.parser import proxy_deep_images, inject_source_slugs, encode_pipe_request, decode_pipe_response
@@ -481,12 +482,44 @@ async def watch_episode(
     provider: Optional[str] = Query(None, description="preferred provider name"),
 ):
     try:
+        # Build ctx from AniList
+        ctx: dict = {}
+        try:
+            gql = """
+            query ($id: Int) {
+                Media(id: $id, type: ANIME) {
+                    title { romaji english native }
+                    synonyms
+                    episodes
+                    status
+                }
+            }
+            """
+            data = await anilist_query(gql, {"id": anilist_id})
+            media = data.get("Media") or {}
+            title_obj = media.get("title") or {}
+            titles = []
+            for t in [title_obj.get("english"), title_obj.get("romaji"), title_obj.get("native")]:
+                if t and t not in titles:
+                    titles.append(t)
+            for s in (media.get("synonyms") or []):
+                if s and s not in titles:
+                    titles.append(s)
+            ctx = {
+                "titles": titles,
+                "expected_episodes": media.get("episodes") or 0,
+                "status": media.get("status") or "",
+            }
+        except Exception as ctx_err:
+            logging.getLogger(__name__).warning("watch_episode: ctx build failed: %s", ctx_err)
+
         result = await provider_race.race_watch(
             anilist_id=anilist_id,
             ep=ep,
             audio=audio,
             preferred=provider,
             lang=lang,
+            ctx=ctx,
         )
         if not result:
             raise HTTPException(
