@@ -114,15 +114,22 @@ async def _scrape_anime_page(slug: str) -> dict:
         return {}
     soup = BeautifulSoup(html, "html.parser")
     episodes: list[dict] = []
-    for a in soup.select("div.episodes-list a, ul.episodes-links a"):
-        href  = a.get("href", "")
-        text  = a.get_text(strip=True)
-        ep_no = re.search(r'(\d+)', text)
+    for a in soup.find_all("a", href=re.compile(r'/episode/')):
+        href = a.get("href", "")
+        ep_no = re.search(r'الحلقة[- _]*(\d+)', href)
+        if not ep_no:
+            ep_no = re.search(r'episode[- _]*(\d+)', href, re.IGNORECASE)
         if href and ep_no:
             episodes.append({"ep": int(ep_no.group(1)), "url": href})
-    logger.warning("anime4up: slug=%s found %d episodes", slug, len(episodes))
-    episodes.sort(key=lambda e: e["ep"])
-    return {"episodes":{"sub": episodes}}
+    seen: set[int] = set()
+    unique: list[dict] = []
+    for e in episodes:
+        if e["ep"] not in seen:
+            seen.add(e["ep"])
+            unique.append(e)
+    logger.warning("anime4up: slug=%s found %d episodes", slug, len(unique))
+    unique.sort(key=lambda e: e["ep"])
+    return {"episodes": {"sub": unique}}
 
 async def get_episodes(anilist_id: int, ctx: dict) -> dict:
     titles: list[str] = ctx.get("titles", [])
