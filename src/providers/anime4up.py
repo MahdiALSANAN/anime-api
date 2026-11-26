@@ -6,10 +6,8 @@ anime4up.py  —  مزوّد Anime4Up العربي
 
 from __future__ import annotations
 import base64
-import json
 import re
 import logging
-from typing import Any
 from bs4 import BeautifulSoup
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
@@ -225,7 +223,6 @@ async def get_episodes(anilist_id: int, ctx: dict) -> dict:
     if not top_slugs:
         log.info("anime4up: لم يُعثر على نتائج لـ anilist_id=%s", anilist_id)
         return {}
-    # جرّب كل slug حتى نجد واحداً فيه حلقات
     series = None
     for cand in top_slugs:
         slug = cand["slug"] if isinstance(cand, dict) else cand
@@ -243,9 +240,17 @@ async def get_episodes(anilist_id: int, ctx: dict) -> dict:
             num = num - offset
         if num > 0:
             episodes_list.append({"ep": num, "url": ep["url"]})
+    # إزالة التكرار
+    seen: set = set()
+    unique_list: list[dict] = []
+    for e in episodes_list:
+        if e["ep"] not in seen:
+            seen.add(e["ep"])
+            unique_list.append(e)
+    episodes_list = unique_list
+    episodes_list.sort(key=lambda x: x["ep"])
     if not episodes_list:
         return {}
-    episodes_list.sort(key=lambda x: x["ep"])
     return {
         "meta": {
             "provider": NAME,
