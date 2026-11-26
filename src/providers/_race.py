@@ -47,18 +47,14 @@ async def _try_provider(name: str, anilist_id: int, audio: str, ep: int, ctx: di
 
 async def race_watch(
     anilist_id: int,
-    ep: int,
-    ctx: dict,
+    ep: int | None = None,
+    ctx: dict | None = None,
     lang: str = "sub",
     audio: str | None = None,
     preferred: str | None = None,
     **kwargs,
 ) -> list[dict]:
-    """
-    يقبل lang= أو audio= أو preferred= — كلها تعني نفس الشيء.
-    preferred يتجاوز lang إذا مُرِّر.
-    """
-    # حدد audio الفعلي
+    ctx = ctx or {}
     effective = preferred or audio or lang or "sub"
 
     if effective == "ar":
@@ -69,7 +65,7 @@ async def race_watch(
         label = "sub"
 
     for name in ranking:
-        streams = await _try_provider(name, anilist_id, effective, ep, ctx)
+        streams = await _try_provider(name, anilist_id, effective, ep or 1, ctx)
         if streams:
             return streams
 
@@ -79,11 +75,12 @@ async def race_watch(
 
 async def race_episodes(
     anilist_id: int,
-    ctx: dict,
+    ctx: dict | None = None,
     lang: str = "sub",
     audio: str | None = None,
     **kwargs,
 ) -> dict:
+    ctx = ctx or {}
     effective = audio or lang or "sub"
     ranking = AR_RANKING if effective == "ar" else EN_RANKING
 
