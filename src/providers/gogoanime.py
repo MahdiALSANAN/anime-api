@@ -29,10 +29,6 @@ async def _search_fn(query: str) -> list[dict]:
     logger.warning("gogo: search '%s' → %d results", query, len(results))
     return results
 
-async def _get_episode_url(slug: str, ep: int) -> str | None:
-    # Gogoanime episode URL pattern: /slug-episode-N
-    return f"{BASE}/{slug}-episode-{ep}"
-
 async def _extract_streams(ep_url: str) -> list[dict]:
     try:
         html = await fetch_text(ep_url, headers={"Referer": BASE + "/"})
@@ -44,7 +40,6 @@ async def _extract_streams(ep_url: str) -> list[dict]:
     streams: list[dict] = []
     seen: set[str] = set()
 
-    # Find the main embed iframe
     for iframe in soup.select("div.play-video iframe, iframe#playerframe"):
         src = iframe.get("src", "")
         if not src:
@@ -83,18 +78,22 @@ async def get_episodes(anilist_id: int, ctx: dict) -> dict:
         logger.warning("gogo: no slugs for %s", titles)
         return {}
     best = top[0]["slug"]
-    # Build episode list from expected_episodes
     n = ctx.get("expected_episodes") or 1
     episodes = [{"ep": i, "url": f"{BASE}/{best}-episode-{i}"} for i in range(1, n + 1)]
     return {"slug": best, "episodes": {"sub": episodes}}
 
 async def watch(anilist_id: int, audio: str, ep: int, ctx: dict) -> list[dict]:
+    logger.warning("gogo: watch called id=%s ep=%s audio=%s ctx_keys=%s", anilist_id, ep, audio, list(ctx.keys()))
     titles: list[str] = ctx.get("titles", [])
+    logger.warning("gogo: titles=%s", titles)
     if not titles:
+        logger.warning("gogo: no titles in ctx, returning empty")
         return []
     top = await find_top_slugs(titles, _search_fn, n=5)
+    logger.warning("gogo: top slugs=%s", top)
     if not top:
         return []
     slug = top[0]["slug"]
     ep_url = f"{BASE}/{slug}-episode-{ep}"
+    logger.warning("gogo: ep_url=%s", ep_url)
     return await _extract_streams(ep_url)
