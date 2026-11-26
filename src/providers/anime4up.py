@@ -1,332 +1,207 @@
-"""
-Anime4Up provider — Arabic subtitled anime
-Base URL: https://w1.anime4up.rest
-"""
-
 from __future__ import annotations
-import asyncio
-import logging
+import base64
 import re
-from urllib.parse import urljoin, quote
+import logging
+from bs4 import BeautifulSoup
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
+from ._http import fetch_text
+from ._match import find_top_slugs
 
-from src.providers._http import fetch_text
-from src.providers._match import best_match
-from src.providers._media import build_ctx
+logger = logging.getLogger(__name__)
 
-log = logging.getLogger(__name__)
-
+NAME = "anime4up"
 BASE = "https://w1.anime4up.rest"
-_TIMEOUT = 20.0
+LANG = "ar"
+
+_AES_KEY = b"4^TT%zCMd4L4ma4Z"
+_AES_IV  = b"4^TT%zCMd4L4ma4Z"
+
+_QUALITY_ORDER = {"1080": 0, "720": 1, "480": 2, "360": 3, "240": 4}
 
 
-# ──────────────────────────────────────────────
-# helpers
-# ──────────────────────────────────────────────
+# ─── AES helpers ────────────────────────────────────────────────────────────
 
-async def _get(url: str, **kw) -> str:
-    return await fetch_text(url, timeout=_TIMEOUT, **kw)
-
-
-def _soup(html: str):
-    from bs4 import BeautifulSoup
-    return BeautifulSoup(html, "html.parser")
+def _decrypt_server_link(encoded: str) -> str:
+    raw = base64.b64decode(encoded)
+    cipher = AES.new(_AES_KEY, AES.MODE_CBC, _AES_IV)
+    return unpad(cipher.decrypt(raw), AES.block_size).decode()
 
 
-# ──────────────────────────────────────────────
-# slug search
-# ──────────────────────────────────────────────
-
-async def _find_slug(titles: list[str]) -> str | None:
-    """Search Anime4Up and return the anime page slug."""
-    for title in titles:
-        query = quote(title)
-        try:
-            html = await _get(f"{BASE}/?s={query}")
-        except Exception as e:
-            log.debug("anime4up: search failed for '%s': %s", title, e)
-            continue
-
-        soup = _soup(html)
-        # search result cards: <div class="anime-card-title"><a href="...">
-        links = soup.select("div.anime-card-title a[href], .post-title a[href], h3.entry-title a[href]")
-        if not links:
-            # fallback: any link containing /anime/
-            links = [a for a in soup.find_all("a", href=True) if "/anime/" in a["href"]]
-
-        candidates = []
-        for a in links:
-            href = a.get("href", "")
-            text = a.get_text(strip=True)
-            if href and text:
-                candidates.append((text, href))
-
-        if not candidates:
-            log.debug("anime4up: no candidates for '%s'", title)
-            continue
-
-        texts = [c[0] for c in candidates]
-        idx = best_match(title, texts)
-        if idx is not None:
-            matched_href = candidates[idx][1]
-            # extract slug from URL like /anime/انمي-name/
-            slug = matched_href.rstrip("/").split("/")[-1]
-            log.info("anime4up: matched '%s' → slug=%s", title, slug)
-            return matched_href  # return full URL
-
-    log.info("anime4up: no slug found for titles=%s", titles)
+def _resolve_video_url(encoded: str) -> str | None:
+    try:
+        return _decrypt_server_link(encoded)
+    except Exception:
+        pass
+    try:
+        return base64.b64decode(encoded).decode()
+    except Exception:
+        pass
+    if encoded.startswith("http"):
+        return encoded
     return None
 
 
-# ──────────────────────────────────────────────
-# episode list
-# ──────────────────────────────────────────────
+# ─── HLS extraction ─────────────────────────────────────────────────────────
 
-async def _parse_episode_list(anime_url: str) -> list[dict]:
-    """Return list of {ep: int, url: str} from anime page."""
+async def _fetch_hls_from_embed(embed_url: str) -> list[str]:
     try:
-        html = await _get(anime_url)
+        html = await fetch_text(embed_url)
     except Exception as e:
-        log.warning("anime4up: failed to load anime page %s: %s", anime_url, e)
+        logger.debug("embed fetch failed %s: %s", embed_url, e)
         return []
 
-    soup = _soup(html)
-    episodes = []
+    urls: list[str] = []
 
-    # selector: episode links in list
-    # common patterns on anime4up: ul.episodes-list li a, .episodes-container a
-    selectors = [
-        "ul.episodes-list li a[href]",
-        ".episodes-container a[href]",
-        "ul.lst-episodes li a[href]",
-        ".ep-list a[href]",
-        "div.episodes a[href]",
-    ]
+    # pattern 1: direct .m3u8 URLs
+    urls += re.findall(r'https?://[^\s"\']+\.m3u8[^\s"\']*', html)
 
-    links = []
-    for sel in selectors:
-        links = soup.select(sel)
-        if links:
-            break
+    # pattern 2: sources:[{file:"..."}]
+    for m in re.finditer(r'sources\s*:\s*\[([^\]]+)\]', html):
+        urls += re.findall(r'["\']?(https?://[^\s"\']+\.m3u8[^\s"\']*)["\']?', m.group(1))
 
-    if not links:
-        # broad fallback: any /episode/ link
-        links = [a for a in soup.find_all("a", href=True)
-                 if "/episode/" in a.get("href", "")]
-
-    for a in links:
-        href = a.get("href", "")
-        if not href or "/episode/" not in href:
-            continue
-
-        # extract episode number from URL or text
-        ep_num = None
-
-        # try URL pattern: الحلقة-{n} or episode-{n}
-        m = re.search(r"(?:الحلقة|episode)[_-](\d+)", href, re.IGNORECASE)
-        if m:
-            ep_num = int(m.group(1))
-
-        if ep_num is None:
-            # try link text
-            text = a.get_text(strip=True)
-            m = re.search(r"(\d+)", text)
-            if m:
-                ep_num = int(m.group(1))
-
-        if ep_num is not None:
-            full_url = href if href.startswith("http") else urljoin(BASE, href)
-            episodes.append({"ep": ep_num, "url": full_url})
-
-    # deduplicate
-    seen = {}
-    for e in episodes:
-        seen[e["ep"]] = e["url"]
-    return [{"ep": k, "url": v} for k, v in sorted(seen.items())]
-
-
-# ──────────────────────────────────────────────
-# stream extraction
-# ──────────────────────────────────────────────
-
-async def _fetch_hls_from_embed(embed_url: str) -> str | None:
-    """Resolve embed URL to .m3u8 HLS link."""
-    try:
-        html = await _get(embed_url)
-    except Exception as e:
-        log.debug("anime4up: embed fetch failed %s: %s", embed_url, e)
-        return None
-
-    # look for m3u8 directly
-    m = re.search(r'["\']([^"\']+\.m3u8[^"\']*)["\']', html)
-    if m:
-        return m.group(1)
-
-    # look for file/source patterns
-    m = re.search(r'(?:file|source|src)\s*:\s*["\']([^"\']+)["\']', html)
-    if m and ("m3u8" in m.group(1) or "mp4" in m.group(1)):
-        return m.group(1)
-
-    # AES-encrypted source (anime4up uses jwplayer with encrypted playlist)
-    if "playlist" in html and "encrypted" in html.lower():
-        m = re.search(r'playlist\s*:\s*["\']([^"\']+)["\']', html)
-        if m:
-            return m.group(1)
-
-    return None
+    # deduplicate, preserve order
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
 
 
 async def _extract_streams(ep_url: str) -> list[dict]:
-    """
-    Load episode watch page and extract video stream URLs.
-    Returns list of {url, quality, type} dicts.
-    """
     try:
-        html = await _get(ep_url)
+        html = await fetch_text(ep_url)
     except Exception as e:
-        log.warning("anime4up: failed to load episode page %s: %s", ep_url, e)
+        logger.debug("episode page fetch failed %s: %s", ep_url, e)
         return []
 
-    soup = _soup(html)
+    soup = BeautifulSoup(html, "html.parser")
     streams: list[dict] = []
 
-    # ── Method 1: server list items with data-src or data-video ──
-    server_selectors = [
-        "ul.server-list li",
-        "ul.servers-list li",
-        ".watch-servers li",
-        ".servers li",
-        "ul.list-server-items li",
-        ".server-item",
-    ]
+    for li in soup.select("ul.server-list li"):
+        encoded = li.get("data-video") or li.get("data-src") or ""
+        if not encoded:
+            continue
 
-    server_items = []
-    for sel in server_selectors:
-        server_items = soup.select(sel)
-        if server_items:
-            log.debug("anime4up: found %d server items via '%s'", len(server_items), sel)
-            break
-
-    for item in server_items:
-        embed_url = (
-            item.get("data-src")
-            or item.get("data-video")
-            or item.get("data-url")
-        )
-        if not embed_url:
-            a = item.find("a")
-            if a:
-                embed_url = a.get("href") or a.get("data-src")
-
+        embed_url = _resolve_video_url(encoded.strip())
         if not embed_url:
             continue
 
-        quality = item.get("data-quality") or item.get_text(strip=True) or "auto"
-        embed_url = embed_url if embed_url.startswith("http") else urljoin(BASE, embed_url)
+        quality_label = li.get_text(strip=True)
+        quality_key = re.search(r'(\d{3,4})', quality_label)
+        quality = quality_key.group(1) if quality_key else "unknown"
 
-        hls = await _fetch_hls_from_embed(embed_url)
-        if hls:
+        hls_urls = await _fetch_hls_from_embed(embed_url)
+        for hls in hls_urls:
             streams.append({
-                "url": hls,
+                "url":     hls,
                 "quality": quality,
-                "type": "hls" if "m3u8" in hls else "mp4",
+                "label":   f"{quality}p",
             })
 
-    if streams:
-        return streams
-
-    # ── Method 2: regex scan entire HTML for embed iframes / data-video ──
-    log.debug("anime4up: method 1 found nothing, trying regex on page HTML")
-
-    # data-video="..." or data-src="..."
-    for attr_val in re.findall(r'data-(?:video|src|url)=["\']([^"\']+)["\']', html):
-        if attr_val.startswith("http") and ("embed" in attr_val or "play" in attr_val or "watch" in attr_val):
-            hls = await _fetch_hls_from_embed(attr_val)
-            if hls:
-                streams.append({"url": hls, "quality": "auto", "type": "hls" if "m3u8" in hls else "mp4"})
-
-    if streams:
-        return streams
-
-    # ── Method 3: look for m3u8 directly in page ──
-    m3u8_urls = re.findall(r'https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*', html)
-    for url in m3u8_urls:
-        streams.append({"url": url, "quality": "auto", "type": "hls"})
-
-    # ── Method 4: iframe src as embed ──
-    if not streams:
-        for iframe in soup.find_all("iframe", src=True):
-            src = iframe["src"]
-            if any(x in src for x in ["embed", "player", "watch", "play"]):
-                hls = await _fetch_hls_from_embed(src)
-                if hls:
-                    streams.append({"url": hls, "quality": "auto", "type": "hls" if "m3u8" in hls else "mp4"})
-
+    streams.sort(key=lambda s: _QUALITY_ORDER.get(s["quality"], 99))
     return streams
 
 
-# ──────────────────────────────────────────────
-# public API
-# ──────────────────────────────────────────────
+# ─── Search & slug matching ──────────────────────────────────────────────────
+
+async def _search_site(query: str) -> list[dict]:
+    url = f"{BASE}/?s={query}"
+    try:
+        html = await fetch_text(url)
+    except Exception as e:
+        logger.debug("search failed %s: %s", url, e)
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    results: list[dict] = []
+
+    for card in soup.select("div.anime-card-details"):
+        a = card.select_one("a")
+        if not a:
+            continue
+        href  = a.get("href", "")
+        title = a.get_text(strip=True) or a.get("title", "")
+        slug  = href.rstrip("/").split("/")[-1]
+        if slug:
+            results.append({"slug": slug, "title": title, "url": href})
+
+    return results
+
+
+async def _search_fn(query: str) -> list[dict]:
+    items = await _search_site(query)
+    return [{"slug": r["slug"], "text": r["title"]} for r in items]
+
+
+# ─── Episode scraping ────────────────────────────────────────────────────────
+
+async def _scrape_anime_page(slug: str) -> dict:
+    url = f"{BASE}/anime/{slug}/"
+    try:
+        html = await fetch_text(url)
+    except Exception as e:
+        logger.debug("anime page fetch failed %s: %s", url, e)
+        return {}
+
+    soup = BeautifulSoup(html, "html.parser")
+    episodes: list[dict] = []
+
+    for a in soup.select("div.episodes-list a, ul.episodes-links a"):
+        href  = a.get("href", "")
+        text  = a.get_text(strip=True)
+        ep_no = re.search(r'(\d+)', text)
+        if href and ep_no:
+            episodes.append({"ep": int(ep_no.group(1)), "url": href})
+
+    episodes.sort(key=lambda e: e["ep"])
+    return {"episodes": {"sub": episodes}}
+
+
+# ─── Public API ──────────────────────────────────────────────────────────────
 
 async def get_episodes(anilist_id: int, ctx: dict) -> dict:
-    """
-    Returns {meta, episodes: {sub: [{ep, url}]}}
-    """
     titles: list[str] = ctx.get("titles", [])
     if not titles:
-        log.warning("anime4up: no titles in ctx for anilist_id=%s", anilist_id)
-        return {"meta": {"lang": "ar", "provider": "anime4up"}, "episodes": {"sub": []}}
+        logger.debug("anime4up: no titles in ctx for id=%s", anilist_id)
+        return {}
 
-    anime_url = await _find_slug(titles)
-    if not anime_url:
-        return {"meta": {"lang": "ar", "provider": "anime4up"}, "episodes": {"sub": []}}
+    top_slugs = await find_top_slugs(titles, _search_fn, n=6)
+    if not top_slugs:
+        logger.debug("anime4up: no slugs found for %s", titles)
+        return {}
 
-    ep_list = await _parse_episode_list(anime_url)
-    log.info("anime4up: found %d episodes for anilist_id=%s", len(ep_list), anilist_id)
+    for entry in top_slugs:
+        result = await _scrape_anime_page(entry["slug"])
+        if result.get("episodes", {}).get("sub"):
+            logger.debug(
+                "anime4up: matched slug=%s score=%.2f",
+                entry["slug"], entry.get("score", 0)
+            )
+            return result
 
-    return {
-        "meta": {"lang": "ar", "provider": "anime4up", "source_url": anime_url},
-        "episodes": {"sub": ep_list},
-    }
+    return {}
 
 
 async def watch(anilist_id: int, audio: str, ep: int, ctx: dict) -> list[dict]:
-    """
-    Returns list of stream dicts: [{url, quality, type}, ...]
-    """
     if audio != "sub":
-        log.debug("anime4up: audio='%s' not supported (only 'sub')", audio)
         return []
 
-    titles: list[str] = ctx.get("titles", [])
-    if not titles:
-        log.warning("anime4up: no titles in ctx for anilist_id=%s", anilist_id)
-        return []
+    # ctx from build_ctx() never contains episodes — always fetch fresh
+    fresh = await get_episodes(anilist_id, ctx)
+    fresh_sub: list = fresh.get("episodes", {}).get("sub", [])
 
-    # Find anime page
-    anime_url = await _find_slug(titles)
-    if not anime_url:
-        log.info("anime4up: could not find anime page for anilist_id=%s titles=%s", anilist_id, titles)
-        return []
-
-    # Find episode URL
-    ep_list = await _parse_episode_list(anime_url)
-    ep_url = next((e["url"] for e in ep_list if e["ep"] == ep), None)
-
+    ep_url: str | None = next(
+        (e["url"] for e in fresh_sub if e["ep"] == ep), None
+    )
     if not ep_url:
-        log.info("anime4up: episode %s not found (total episodes found: %d)", ep, len(ep_list))
-        # Debug: log what episodes were found
-        found_eps = sorted([e["ep"] for e in ep_list])
-        log.info("anime4up: available episodes: %s", found_eps[:20])
+        logger.debug("anime4up: ep %s not found for id=%s", ep, anilist_id)
         return []
 
-    log.info("anime4up: loading episode %s from %s", ep, ep_url)
     streams = await _extract_streams(ep_url)
-
-    if not streams:
-        log.info("anime4up: no streams found for episode %s", ep)
-    else:
-        log.info("anime4up: ✅ found %d stream(s) for episode %s (best: %s)",
-                 len(streams), ep, streams[0].get("quality", "?"))
-
+    logger.debug(
+        "anime4up: id=%s ep=%s → %d streams", anilist_id, ep, len(streams)
+    )
     return streams
