@@ -27,7 +27,6 @@ BASE = "https://w1.anime4up.rest"
 LANG = "ar"
 
 # مفتاح AES وـ IV المستخدمان في تشفير روابط الخوادم
-# هذه القيم ثابتة في سكريبت الموقع (معروفة عامياً من الكود المصدري)
 _AES_KEY = b"4^TT%zCMd4L4ma4Z"   # 16 byte
 _AES_IV  = b"4^TT%zCMd4L4ma4Z"   # 16 byte
 
@@ -52,7 +51,6 @@ async def _get(path: str, **kw) -> str:
 def _decrypt_server_link(encoded: str) -> str | None:
     """
     يفكّ تشفير رابط الخادم المشفَّر بـ AES-CBC.
-    الموقع يخزن روابط الخوادم مشفّرة في data-video attribute.
     """
     try:
         raw = base64.b64decode(encoded)
@@ -77,16 +75,6 @@ def _try_decode_base64(s: str) -> str:
 async def _extract_streams(ep_url: str) -> list[dict]:
     """
     يفتح صفحة الحلقة ويستخرج روابط HLS المباشرة.
-    
-    بنية صفحة الحلقة في Anime4Up:
-    - قائمة <li> داخل ul.servers-list
-    - كل <li> يحتوي data-video="<رابط مشفّر أو مباشر>"
-    - بعض الروابط تحتاج فكّ AES، بعضها base64 عادي
-    
-    الخوادم المدعومة:
-    - Vidbom / Vidabc / Vidhide → HLS مباشر
-    - Doodstream → HLS
-    - StreamWish → HLS
     """
     streams: list[dict] = []
 
@@ -98,12 +86,9 @@ async def _extract_streams(ep_url: str) -> list[dict]:
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # استخراج روابط الخوادم من العناصر
     server_items = soup.select("ul.server-list li, ul.servers-list li, .watch-servers li")
-    
-    # إذا ما لقى العناصر، يحاول regex في الـ HTML مباشرة
+
     if not server_items:
-        # يبحث عن data-video في الـ HTML الخام
         raw_videos = re.findall(r'data-video=["\']([^"\']+)["\']', html)
         for encoded in raw_videos:
             url = _resolve_video_url(encoded)
@@ -129,21 +114,17 @@ async def _extract_streams(ep_url: str) -> list[dict]:
 def _resolve_video_url(encoded: str) -> str | None:
     """
     يحوّل القيمة المشفّرة إلى رابط iframe/embed حقيقي.
-    يجرّب بالترتيب: AES-CBC ← base64 ← الرابط مباشرة.
     """
     if not encoded:
         return None
 
-    # إذا كان رابطاً مباشراً
     if encoded.startswith("http"):
         return encoded
 
-    # محاولة فكّ AES
     decrypted = _decrypt_server_link(encoded)
     if decrypted and decrypted.startswith("http"):
         return decrypted
 
-    # محاولة base64 عادي
     decoded = _try_decode_base64(encoded)
     if decoded.startswith("http"):
         return decoded
@@ -154,7 +135,6 @@ def _resolve_video_url(encoded: str) -> str | None:
 async def _fetch_hls_from_embed(embed_url: str) -> list[dict]:
     """
     يفتح صفحة الـ embed ويستخرج روابط HLS (.m3u8).
-    يدعم: Vidbom, Vidabc, Vidhide, StreamWish, Doodstream.
     """
     streams: list[dict] = []
 
@@ -167,18 +147,15 @@ async def _fetch_hls_from_embed(embed_url: str) -> list[dict]:
         log.debug("anime4up: فشل جلب embed %s: %s", embed_url, e)
         return streams
 
-    # البحث عن روابط HLS مباشرة في الكود
     hls_urls = re.findall(r'["\']([^"\']*\.m3u8[^"\']*)["\']', html)
-    
+
     for hls_url in hls_urls:
-        # تنظيف URL
         hls_url = hls_url.strip()
         if not hls_url.startswith("http"):
             continue
-        
-        # تخمين الجودة من الرابط
+
         quality = _guess_quality(hls_url)
-        
+
         streams.append({
             "url": hls_url,
             "quality": quality,
@@ -186,9 +163,7 @@ async def _fetch_hls_from_embed(embed_url: str) -> list[dict]:
             "type": "hls",
         })
 
-    # إذا ما لقى HLS مباشرة، يبحث عن JSON يحتوي source/file
     if not streams:
-        # Vidbom / Vidabc pattern: sources: [{file: "..."}]
         json_matches = re.findall(
             r'sources\s*:\s*\[([^\]]+)\]', html, re.DOTALL
         )
@@ -204,7 +179,6 @@ async def _fetch_hls_from_embed(embed_url: str) -> list[dict]:
                         "type": "hls",
                     })
 
-        # StreamWish / Vidhide pattern: file:"..."
         if not streams:
             file_matches = re.findall(r'["\']?file["\']?\s*:\s*["\']([^"\']+\.m3u8[^"\']*)["\']', html)
             for url in file_matches:
@@ -232,7 +206,6 @@ def _extract_server_name(embed_url: str) -> str:
     try:
         from urllib.parse import urlparse
         host = urlparse(embed_url).netloc
-        # يأخذ الجزء الأول من الدومين
         return host.split(".")[0]
     except Exception:
         return "unknown"
@@ -251,40 +224,35 @@ def _sort_streams(streams: list[dict]) -> list[dict]:
 async def _search_site(query: str) -> list[dict]:
     """
     يبحث في Anime4Up ويعيد قائمة النتائج.
-    رابط البحث: /wp-admin/admin-ajax.php?action=live_search
     """
     candidates: list[dict] = []
 
     try:
-        # Anime4Up يستخدم AJAX search
         search_url = f"{BASE}/?s={query.replace(' ', '+')}"
         html = await _get(search_url)
         soup = BeautifulSoup(html, "html.parser")
 
-        # البحث في نتائج الصفحة
         cards = soup.select("div.anime-card-container, div.anime-card, article.anime-card")
-        
+
         if not cards:
-            # يحاول selector آخر
             cards = soup.select(".film-poster, .anime-block, .anime-item")
 
         for card in cards:
             link = card.select_one("a")
             title_el = card.select_one(".anime-card-title, h3, .title, h2")
-            
+
             if not link:
                 continue
-                
+
             href = link.get("href", "")
-            title = (title_el.get_text(strip=True) if title_el 
+            title = (title_el.get_text(strip=True) if title_el
                      else link.get("title", "") or link.get_text(strip=True))
 
             if not href or not title:
                 continue
 
-            # استخراج slug من الرابط
             slug = href.rstrip("/").split("/")[-1]
-            
+
             candidates.append({
                 "slug": slug,
                 "title": title,
@@ -300,7 +268,6 @@ async def _search_site(query: str) -> list[dict]:
 async def _search_fn(query: str) -> list[dict]:
     """
     دالة البحث التي تُمرَّر إلى find_top_slugs().
-    تعيد قائمة بـ {"slug": ..., "title": ...}.
     """
     results = await _search_site(query)
     return [{"slug": r["slug"], "title": r["title"]} for r in results]
@@ -310,10 +277,7 @@ async def _search_fn(query: str) -> list[dict]:
 
 async def _scrape_anime_page(slug: str) -> dict | None:
     """
-    يفتح صفحة الأنمي ويجمع:
-    - العنوان العربي والإنجليزي
-    - عدد الحلقات
-    - روابط الحلقات
+    يفتح صفحة الأنمي ويجمع العنوان وروابط الحلقات.
     """
     try:
         url = f"{BASE}/anime/{slug}/"
@@ -324,38 +288,32 @@ async def _scrape_anime_page(slug: str) -> dict | None:
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # استخراج العنوان
     title_ar = ""
     title_en = ""
-    
+
     h1 = soup.select_one("h1.anime-title, h1, .anime-name")
     if h1:
         title_ar = h1.get_text(strip=True)
-    
-    # العنوان الإنجليزي من meta أو span مخصّص
+
     title_en_el = soup.select_one(".anime-title-english, [lang='en']")
     if title_en_el:
         title_en = title_en_el.get_text(strip=True)
 
-    # استخراج روابط الحلقات
-    # Anime4Up يضع الحلقات في قائمة عكسية (الأحدث أولاً)
     ep_links: list[dict] = []
-    
+
     ep_items = soup.select("div.episode-link a, ul.episodes-list a, .all-episodes a")
-    
+
     if not ep_items:
-        # يحاول selector آخر
         ep_items = soup.select("a[href*='/episode/']")
 
     for a in ep_items:
         href = a.get("href", "")
         if not href or "/episode/" not in href:
             continue
-        
+
         ep_text = a.get_text(strip=True)
-        # استخراج رقم الحلقة من النص أو الرابط
         ep_num = _extract_ep_number(ep_text, href)
-        
+
         ep_links.append({
             "number": ep_num,
             "url": href if href.startswith("http") else f"{BASE}{href}",
@@ -365,7 +323,6 @@ async def _scrape_anime_page(slug: str) -> dict | None:
         log.debug("anime4up: لم يُعثر على حلقات للأنمي '%s'", slug)
         return None
 
-    # ترتيب الحلقات تصاعدياً
     ep_links.sort(key=lambda x: x["number"])
 
     return {
@@ -379,21 +336,18 @@ async def _scrape_anime_page(slug: str) -> dict | None:
 
 def _extract_ep_number(text: str, url: str) -> int:
     """يستخرج رقم الحلقة من النص أو الرابط."""
-    # من النص: "الحلقة 5" أو "Episode 5" أو "5"
     m = re.search(r'(\d+)', text)
     if m:
         return int(m.group(1))
-    
-    # من الرابط: .../الحلقة-5-...
+
     m = re.search(r'[حة-](\d+)', url)
     if m:
         return int(m.group(1))
-    
-    # الرقم الأخير في الرابط
+
     nums = re.findall(r'\d+', url)
     if nums:
         return int(nums[-1])
-    
+
     return 0
 
 
@@ -402,12 +356,7 @@ def _extract_ep_number(text: str, url: str) -> int:
 async def get_episodes(anilist_id: int, ctx: dict) -> dict:
     """
     يبحث عن الأنمي ويعيد قائمة الحلقات.
-    
-    ctx يحتوي على:
-    - titles: قائمة العناوين المحتملة
-    - expected_episodes: عدد الحلقات المتوقّع
-    - status: حالة الأنمي
-    - season_offset: إزاحة الموسم
+    ✅ episodes["sub"] = list of {"ep": N, "url": "..."} — يتوافق مع _race.py
     """
     titles: list[str] = ctx.get("titles", [])
     expected: int = ctx.get("expected_episodes", 0)
@@ -420,7 +369,7 @@ async def get_episodes(anilist_id: int, ctx: dict) -> dict:
 
     # ─ الخطوة 1: البحث الذكي عن slug ─
     top_slugs = await find_top_slugs(titles, _search_fn, n=6)
-    
+
     if not top_slugs:
         log.info("anime4up: لم يُعثر على نتائج لـ anilist_id=%s", anilist_id)
         return {}
@@ -438,17 +387,21 @@ async def get_episodes(anilist_id: int, ctx: dict) -> dict:
         log.info("anime4up: لم يُعثر على تطابق مناسب لـ anilist_id=%s", anilist_id)
         return {}
 
-    # ─ الخطوة 3: بناء قائمة الحلقات ─
-    episodes_map: dict[int, str] = {}
+    # ─ الخطوة 3: بناء قائمة الحلقات كـ list ─
+    # ✅ FIXED: كان dict[int, str] — الآن list[{"ep": N, "url": "..."}]
+    # _race.py يتحقق: isinstance(v, list) — dict يُتجاهل تماماً
+    episodes_list: list[dict] = []
     for ep in series.get("episodes", []):
         num = ep["number"]
         if offset:
             num = num - offset
         if num > 0:
-            episodes_map[num] = ep["url"]
+            episodes_list.append({"ep": num, "url": ep["url"]})
 
-    if not episodes_map:
+    if not episodes_list:
         return {}
+
+    episodes_list.sort(key=lambda x: x["ep"])
 
     return {
         "meta": {
@@ -458,9 +411,9 @@ async def get_episodes(anilist_id: int, ctx: dict) -> dict:
             "title": series.get("title_ar", "") or series.get("title_en", ""),
         },
         "episodes": {
-            # Anime4Up = عربي مترجم = "sub" في نظامنا
-            "sub": episodes_map,
-            "dub": {},
+            # ✅ list — يتوافق مع _race.py isinstance(v, list)
+            "sub": episodes_list,
+            "dub": [],
         },
     }
 
@@ -468,40 +421,33 @@ async def get_episodes(anilist_id: int, ctx: dict) -> dict:
 async def watch(anilist_id: int, audio: str, ep: int, ctx: dict) -> list[dict]:
     """
     يعيد روابط HLS للحلقة المطلوبة.
-    
-    المعاملات:
-    - audio: "sub" (عربي مترجم) — المدعوم الوحيد
-    - ep: رقم الحلقة
-    - ctx: يحتوي على cache من get_episodes()
-    
-    يعيد قائمة بـ:
-    [{"url": "...", "quality": "1080p", "server": "...", "type": "hls"}, ...]
+    audio: "sub" فقط (عربي مترجم)
     """
     if audio != "sub":
         log.debug("anime4up: audio='%s' غير مدعوم (فقط 'sub')", audio)
         return []
 
-    # محاولة الحصول على الرابط من الـ cache
-    cached_episodes: dict = ctx.get("episodes", {}).get("sub", {})
-    ep_url: str | None = cached_episodes.get(ep)
+    # ✅ FIXED: البحث في list بدل dict
+    cached_sub: list = ctx.get("episodes", {}).get("sub", [])
+    ep_url: str | None = next((e["url"] for e in cached_sub if e["ep"] == ep), None)
 
-    # إذا لم يكن في الـ cache، يبحث من جديد
     if not ep_url:
         log.debug("anime4up: الحلقة %s غير موجودة في cache، إعادة البحث...", ep)
         fresh = await get_episodes(anilist_id, ctx)
-        ep_url = fresh.get("episodes", {}).get("sub", {}).get(ep)
+        # ✅ FIXED: نفس التعديل هنا
+        fresh_sub = fresh.get("episodes", {}).get("sub", [])
+        ep_url = next((e["url"] for e in fresh_sub if e["ep"] == ep), None)
 
     if not ep_url:
         log.info("anime4up: الحلقة %s غير موجودة لـ anilist_id=%s", ep, anilist_id)
         return []
 
-    # استخراج روابط HLS من صفحة الحلقة
     streams = await _extract_streams(ep_url)
-    
+
     if not streams:
         log.info("anime4up: لم يُعثر على روابط فيديو للحلقة %s", ep)
     else:
-        log.info("anime4up: ✅ وُجد %d رابط للحلقة %s (أفضل: %s)", 
+        log.info("anime4up: ✅ وُجد %d رابط للحلقة %s (أفضل: %s)",
                  len(streams), ep, streams[0].get("quality", "?"))
 
     return streams
