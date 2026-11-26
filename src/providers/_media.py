@@ -91,4 +91,27 @@ async def build_ctx(anilist_id: int, media: dict | None = None) -> dict:
         anizip = await get_anizip(anilist_id)
     except Exception:
         anizip = None
-    return {"media": media, "anizip": anizip}
+
+    # بناء قائمة العناوين للمزوّدين
+    t = media.get("title") or {}
+    titles: list[str] = []
+    for v in (t.get("english"), t.get("romaji"), t.get("native")):
+        if v and v.strip():
+            titles.append(v.strip())
+    for s in (media.get("synonyms") or []):
+        if s and s.strip():
+            titles.append(s.strip())
+
+    expected = media.get("episodes") or 0
+    nae = media.get("nextAiringEpisode") or {}
+    if not expected and nae.get("episode"):
+        expected = nae["episode"] - 1
+
+    return {
+        "media": media,
+        "anizip": anizip,
+        "titles": titles,
+        "expected_episodes": expected,
+        "status": media.get("status", ""),
+        "season_offset": 0,
+    }
