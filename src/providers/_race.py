@@ -9,8 +9,8 @@ RANKING = [
     "kaa", "anibd", "animegg", "mkissa", "animeonsen",
 ]
 
-# قائمة المزوّدين العرب (الآن تعتمد فقط على anime4up)
-AR_RANKING = ["anime4up"]
+# قائمة المزوّدين العرب — anime3rb أولاً لأن stream extraction يعمل بدون JS
+AR_RANKING = ["anime3rb", "anime4up"]
 
 WATCH_TIMEOUT = 75.0
 EPISODES_TIMEOUT = 60.0
@@ -87,7 +87,6 @@ async def _watch_one(mod, name, anilist_id, ep, audio, ctx):
         return name, None, round(time.time() - t0, 3), False
 
 async def race_watch(anilist_id: int, ep: int, audio: str = "sub", preferred: str | None = None, lang: str = "en") -> dict | None:
-    # Arabic requests go to AR_RANKING providers only
     if lang == "ar":
         mods = ar_providers()
         if not mods:
@@ -121,7 +120,6 @@ async def race_watch(anilist_id: int, ep: int, audio: str = "sub", preferred: st
         winner["lang"] = "ar"
         return winner
 
-    # English providers
     mods = providers()
     if not mods:
         return None
