@@ -478,7 +478,7 @@ async def watch_episode(
     anilist_id: int,
     audio: str,
     ep: int,
-    lang: str = Query("ar", description="ar for Arabic providers, en for English"),
+    lang: str = Query("en", description="ar for Arabic providers, en for English"),
     provider: Optional[str] = Query(None, description="preferred provider name"),
 ):
     try:
