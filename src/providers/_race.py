@@ -87,14 +87,15 @@ async def _watch_one(mod, name, anilist_id, ep, audio, ctx):
         print(f"[RACE] {name} watch failed (AniList={anilist_id}, episode={ep}, audio={audio}): {type(e).__name__}: {e}", flush=True)
         return name, None, round(time.time() - t0, 3), False
 
-async def race_watch(anilist_id: int, ep: int, audio: str = "sub", preferred: str | None = None, lang: str = "en") -> dict | None:
+async def race_watch(anilist_id: int, ep: int, audio: str = "sub", preferred: str | None = None, lang: str = "en", ctx: dict | None = None) -> dict | None:
     # Arabic requests go to AR_RANKING providers only
     if lang == "ar":
         mods = ar_providers()
         if not mods:
             print("[RACE] No Arabic providers available", flush=True)
             return None
-        ctx = await build_ctx(anilist_id)
+        if ctx is None:
+            ctx = await build_ctx(anilist_id)
         pending = {asyncio.ensure_future(_watch_one(mod, name, anilist_id, ep, audio, ctx)) for name, mod in mods}
         timings: dict = {}
         winner = None
@@ -126,7 +127,8 @@ async def race_watch(anilist_id: int, ep: int, audio: str = "sub", preferred: st
     mods = providers()
     if not mods:
         return None
-    ctx = await build_ctx(anilist_id)
+    if ctx is None:
+        ctx = await build_ctx(anilist_id)
     if preferred:
         pick = next((m for m in mods if m[0] == preferred), None)
         if pick is not None:
