@@ -545,3 +545,104 @@ async def watch_episode(
                 "traceback": traceback.format_exc(),
             }
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Anime4Up direct stream endpoint
+# Swift calls: GET /anime/anime4up/{slug}?e={episode}
+# Returns format compatible with AVPlayer: {"direct_stream": "...", "headers": {...}}
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/anime4up/{slug}")
+async def anime4up_direct_stream(
+    slug: str,
+    e: int = Query(..., description="episode number"),
+):
+    """
+    Swift calls: GET /anime/anime4up/{slug}?e={episode}
+    Returns: {"direct_stream": "...", "headers": {"Referer": "..."}, ...}
+    """
+    from src.providers import anime4up as a4u
+
+    try:
+        # 1. resolve the real domain once
+        resolved_domain = await a4u._resolve_base()
+
+        # 2. scrape episode list directly by slug (no AniList search needed)
+        anime_data = await a4u._scrape_anime_page(slug)
+        sub_eps: list = anime_data.get("episodes", {}).get("sub", [])
+
+        if not sub_eps:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "no_episodes_found",
+                    "slug": slug,
+                    "resolved_domain": resolved_domain,
+                },
+            )
+
+        # 3. find the requested episode URL
+        ep_url: str | None = next(
+            (ep["url"] for ep in sub_eps if ep["ep"] == e), None
+        )
+        if not ep_url:
+            available = [ep["ep"] for ep in sub_eps]
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "episode_not_found",
+                    "requested": e,
+                    "available": available,
+                    "slug": slug,
+                },
+            )
+
+        # 4. extract HLS streams from that episode page
+        streams = await a4u._extract_streams(ep_url)
+
+        if not streams:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "no_streams_extracted",
+                    "ep_url": ep_url,
+                    "slug": slug,
+                    "episode": e,
+                },
+            )
+
+        # 5. pick best quality stream (already sorted by _extract_streams)
+        best = streams[0]
+
+        return {
+            "direct_stream": best["url"],
+            "headers": {
+                "Referer": resolved_domain + "/",
+                "Origin": resolved_domain,
+            },
+            "resolved_domain": resolved_domain,
+            "quality": best.get("label", "unknown"),
+            "servers": [
+                {"url": s["url"], "quality": s.get("label", "unknown")}
+                for s in streams
+            ],
+            "provider": "anime4up",
+            "slug": slug,
+            "episode": e,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import traceback
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": type(exc).__name__,
+                "message": str(exc),
+                "traceback": traceback.format_exc(),
+                "slug": slug,
+                "episode": e,
+            },
+        )
