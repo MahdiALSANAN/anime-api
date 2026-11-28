@@ -11,8 +11,33 @@ from ._match import find_top_slugs
 logger = logging.getLogger(__name__)
 
 NAME = "anime4up"
-BASE = "https://w1.anime4up.rest"
 LANG = "ar"
+
+_BOND_ENTRY = "https://www.anime4up.bond/"
+_resolved_base: str | None = None
+
+async def _resolve_base() -> str:
+    global _resolved_base
+    if _resolved_base:
+        return _resolved_base
+    try:
+        from curl_cffi.requests import AsyncSession
+        async with AsyncSession() as s:
+            r = await s.get(
+                _BOND_ENTRY,
+                impersonate="chrome124",
+                allow_redirects=True,
+                timeout=15.0,
+            )
+            from urllib.parse import urlparse
+            parsed = urlparse(str(r.url))
+            _resolved_base = f"{parsed.scheme}://{parsed.netloc}"
+            logger.warning("anime4up: resolved base = %s", _resolved_base)
+            return _resolved_base
+    except Exception as e:
+        logger.warning("anime4up: base resolve failed, fallback: %s", e)
+        _resolved_base = "https://w1.anime4up.rest"
+        return _resolved_base
 
 _AES_KEY = b"4^TT%zCMd4L4ma4Z"
 _AES_IV  = b"4^TT%zCMd4L4ma4Z"
@@ -82,7 +107,8 @@ async def _extract_streams(ep_url: str) -> list[dict]:
     return streams
 
 async def _search_site(query: str) -> list[dict]:
-    url = f"{BASE}/?s={query}"
+    base = await _resolve_base()
+    url = f"{base}/?s={query}"
     try:
         html = await fetch_text(url)
     except Exception as e:
@@ -106,7 +132,8 @@ async def _search_fn(query: str) -> list[dict]:
     return [{"slug": r["slug"], "text": r["title"]} for r in items]
 
 async def _scrape_anime_page(slug: str) -> dict:
-    url = f"{BASE}/anime/{slug}/"
+    base = await _resolve_base()
+    url = f"{base}/anime/{slug}/"
     try:
         html = await fetch_text(url)
     except Exception as e:
