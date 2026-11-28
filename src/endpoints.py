@@ -974,23 +974,14 @@ async def get_anime4up_stream(
     URL format: /anime/anime4up/{slug}?e={episode_number}
     Example:    /anime/anime4up/black-clover-2nd-season?e=9
     """
-    from urllib.parse import urlparse
-
-    # Resolve live domain via bond redirect
+    # Always use the confirmed live domain directly — bond redirect is blocked on Render
     async with httpx.AsyncClient(
         headers=_A4U_UA_HEADERS,
         follow_redirects=True,
         timeout=20,
     ) as client:
 
-        # Step 1 — resolve current live domain
-        live_base = _A4U_LIVE
-        try:
-            r = await client.get(_A4U_BOND, timeout=10)
-            parsed = urlparse(str(r.url))
-            live_base = f"{parsed.scheme}://{parsed.netloc}"
-        except Exception:
-            pass  # fall back to known live domain
+        live_base = _A4U_LIVE  # hardcoded: 4i.nku67qv.shop
 
         # Step 2 — build episode URL (Arabic pattern)
         ep_url_arabic = (
