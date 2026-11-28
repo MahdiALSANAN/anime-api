@@ -31,12 +31,16 @@ async def _resolve_base() -> str:
             )
             from urllib.parse import urlparse
             parsed = urlparse(str(r.url))
-            _resolved_base = f"{parsed.scheme}://{parsed.netloc}"
+            resolved = f"{parsed.scheme}://{parsed.netloc}"
+            # bond is just an entry point, not the real domain
+            if "anime4up.bond" in resolved:
+                resolved = "https://4i.nku67qv.shop"
+            _resolved_base = resolved
             logger.warning("anime4up: resolved base = %s", _resolved_base)
             return _resolved_base
     except Exception as e:
         logger.warning("anime4up: base resolve failed, fallback: %s", e)
-        _resolved_base = "https://w1.anime4up.rest"
+        _resolved_base = "https://4i.nku67qv.shop"
         return _resolved_base
 
 _AES_KEY = b"4^TT%zCMd4L4ma4Z"
